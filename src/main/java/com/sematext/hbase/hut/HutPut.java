@@ -23,6 +23,9 @@ import org.apache.hadoop.hbase.client.RowLock;
  * Use it when you want to use advantage of HBaseHUT updates processing logic.
  */
 public class HutPut extends Put {
+  /** Constructor for Writable. DO NOT USE */
+  public HutPut() {}
+
   public HutPut(byte[] row) {
     super(adjustRow(row));
   }

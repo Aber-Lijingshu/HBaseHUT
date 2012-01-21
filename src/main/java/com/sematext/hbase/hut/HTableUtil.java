@@ -33,11 +33,13 @@ final class HTableUtil {
 
   private HTableUtil() {}
 
+  // TODO: refactor to avoid code duplication: use deleteRange method with filter
   public static void deleteRange(HTable hTable, byte[] firstInclusive, byte[] lastInclusive, byte[] processingResultToLeave) throws IOException {
     Scan deleteScan = getDeleteScan(firstInclusive, lastInclusive);
     ResultScanner toDeleteScanner = hTable.getScanner(deleteScan);
     Result toDelete = toDeleteScanner.next();
     // Huge number of deletes can eat up all memory, hence keeping buffer
+    // TODO: implement patch for HTable to support buffering deletes instead
     ArrayList<Delete> listToDelete = new ArrayList<Delete>(DELETES_BUFFER_MAX_SIZE);
     while (toDelete != null) {
       if (!Bytes.equals(processingResultToLeave, toDelete.getRow())) {
@@ -61,15 +63,30 @@ final class HTableUtil {
 
   public static void deleteRange(HTable hTable, byte[] firstInclusive, byte[] lastNonInclusive) throws IOException {
     Scan deleteScan = getDeleteScan(firstInclusive, lastNonInclusive);
+    deleteRange(hTable, deleteScan);
+  }
+
+  public static interface ResultFilter {
+    boolean accept(Result result);
+  }
+
+  public static void deleteRange(HTable hTable, Scan deleteScan) throws IOException {
+    deleteRange(hTable, deleteScan, null);
+  }
+
+  public static void deleteRange(HTable hTable, Scan deleteScan, ResultFilter resultFilter) throws IOException {
     ResultScanner toDeleteScanner = hTable.getScanner(deleteScan);
     Result toDelete = toDeleteScanner.next();
     // Huge number of deletes can eat up all memory, hence keeping buffer
+    // TODO: implement patch for HTable to support buffering deletes instead
     ArrayList<Delete> listToDelete = new ArrayList<Delete>(DELETES_BUFFER_MAX_SIZE);
     while (toDelete != null) {
-      listToDelete.add(new Delete(toDelete.getRow()));
-      if (listToDelete.size() >= DELETES_BUFFER_MAX_SIZE) {
-        hTable.delete(listToDelete);
-        listToDelete.clear();
+      if (resultFilter == null || resultFilter.accept(toDelete)) {
+        listToDelete.add(new Delete(toDelete.getRow()));
+        if (listToDelete.size() >= DELETES_BUFFER_MAX_SIZE) {
+          hTable.delete(listToDelete);
+          listToDelete.clear();
+        }
       }
       toDelete = toDeleteScanner.next();
     }

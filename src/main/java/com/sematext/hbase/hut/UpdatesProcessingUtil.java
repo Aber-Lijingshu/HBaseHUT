@@ -16,6 +16,7 @@
 package com.sematext.hbase.hut;
 
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 
@@ -41,5 +42,26 @@ public final class UpdatesProcessingUtil {
     while (resultScanner.next() != null) {
       // DO NOTHING
     }
+  }
+
+  /**
+   * Rolls back all writes performed after or at specified timestamp.
+   * NOTE: may not rollback partially in case compaction was performed
+   * @param hTable table to perform rollback on
+   * @param tsInclusive timestamp
+   * @throws IOException when underlying HTable operations throw exception
+   */
+  public static void rollbackWrittenAfter(HTable hTable, final long tsInclusive) throws IOException {
+    // todo: shouldn't we create some index to do this faster?
+    Scan scan = new Scan(); // all-data scan
+    // todo: use hut-specific (fast-forwarding?) server-side filter to fetch only what needs to be deleted
+    HTableUtil.ResultFilter filter = new HTableUtil.ResultFilter() {
+      @Override
+      public boolean accept(Result result) {
+        return HutRowKeyUtil.writtenAfter(result.getRow(), tsInclusive);
+      }
+    };
+
+    HTableUtil.deleteRange(hTable, scan, filter);
   }
 }

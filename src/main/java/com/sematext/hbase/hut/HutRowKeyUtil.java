@@ -93,4 +93,9 @@ public final class HutRowKeyUtil {
                        hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
     }
   }
+
+  static boolean writtenAfter(byte[] hutRowKey, long startTsInclusive) {
+    long startInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    return startTsInclusive <= startInterval;
+  }
 }

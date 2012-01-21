@@ -46,6 +46,7 @@ public class TestHBaseHut {
     testingUtility.startMiniCluster();
   }
 
+  // Stores only last 5 stock prices
   static class StockSaleUpdateProcessor implements UpdateProcessor {
     @Override
     public void process(Iterable<Result> records, UpdateProcessingResult processingResult) {
@@ -361,6 +362,73 @@ public class TestHBaseHut {
 
     hTable.close();
   }
+
+  @Test
+  public void testRollback() throws IOException, InterruptedException {
+    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+
+    // Writing data
+    byte[] chrysler = Bytes.toBytes("chrysler");
+    byte[] ford = Bytes.toBytes("ford");
+
+    verifyLastSales(hTable, processor, chrysler, new int[] {});
+    verifyLastSales(hTable, processor, ford, new int[] {});
+    recordSale(hTable, chrysler, 90);
+    recordSale(hTable, chrysler, 100);
+    recordSale(hTable, ford, 18);
+    recordSale(hTable, chrysler, 120);
+    verifyLastSales(hTable, processor, chrysler, new int[] {120, 100, 90});
+    verifyLastSales(hTable, processor, ford, new int[] {18});
+
+    long ts0 = System.currentTimeMillis();
+    
+    recordSale(hTable, chrysler, 115);
+    recordSale(hTable, ford, 22);
+    recordSale(hTable, chrysler, 110);
+    verifyLastSales(hTable, processor, chrysler, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, ford, new int[] {22, 18});
+
+    long ts1 = System.currentTimeMillis();
+
+    recordSale(hTable, chrysler, 105);
+    recordSale(hTable, ford, 24);
+    recordSale(hTable, ford, 28);
+    verifyLastSales(hTable, processor, chrysler, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, ford, new int[] {28, 24, 22, 18});
+
+    long ts2 = System.currentTimeMillis();
+
+    recordSale(hTable, chrysler, 107);
+    recordSale(hTable, ford, 32);
+    recordSale(hTable, ford, 40);
+    recordSale(hTable, chrysler, 113);
+    verifyLastSales(hTable, processor, chrysler, new int[] {113, 107, 105, 110, 115});
+    verifyLastSales(hTable, processor, ford, new int[] {40, 32, 28, 24, 22});
+
+    // performing rollbacks to ts1 and then to ts2
+    UpdatesProcessingUtil.rollbackWrittenAfter(hTable, ts2);
+    verifyLastSales(hTable, processor, chrysler, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, ford, new int[] {28, 24, 22, 18});
+
+    UpdatesProcessingUtil.rollbackWrittenAfter(hTable, ts1);
+    verifyLastSales(hTable, processor, chrysler, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, ford, new int[] {22, 18});
+
+    // writing more data and rolling back to ts0
+    recordSale(hTable, chrysler, 105);
+    recordSale(hTable, ford, 24);
+    recordSale(hTable, ford, 28);
+    verifyLastSales(hTable, processor, chrysler, new int[]{105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, ford, new int[] {28, 24, 22, 18});
+
+    UpdatesProcessingUtil.rollbackWrittenAfter(hTable, ts0);
+    verifyLastSales(hTable, processor, chrysler, new int[] {120, 100, 90});
+    verifyLastSales(hTable, processor, ford, new int[]{18});
+
+    hTable.close();
+  }
+
 
   private static void performUpdatesProcessingButWithoutDeletionOfProcessedRecords(final HTable hTable, UpdateProcessor updateProcessor) throws IOException {
     ResultScanner resultScanner =
