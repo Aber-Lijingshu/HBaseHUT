@@ -35,6 +35,12 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Perform processing updates by running MapReduce job, and hence utilizes data locality during work (to some extend).
+ * TODO: Think over implementing map-only job for doing compaction. Which
+ * Should work much faster. Map-only job
+ * may cause some spans of records to be compacted into multiple result
+ * records, which is usually (always?) ok. Multiple updates processing
+ * results records should be supported already. One concern is about writing
+ * into same table from a Mapper which may cause issues.
  */
 public final class UpdatesProcessingMrJob {
   private UpdatesProcessingMrJob() {}
