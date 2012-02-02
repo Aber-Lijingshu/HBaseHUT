@@ -26,7 +26,8 @@ import org.apache.hadoop.hbase.util.Bytes;
  * the whole interval of records with creationTime between these two values.
  */
 public final class HutRowKeyUtil {
-  private static final byte[] NOT_SET_MARK = Bytes.toBytes(0L);
+  private static final long NOT_SET_MARK_VAL = 0L;
+  private static final byte[] NOT_SET_MARK = Bytes.toBytes(NOT_SET_MARK_VAL);
 
   private HutRowKeyUtil() {}
 
@@ -97,5 +98,12 @@ public final class HutRowKeyUtil {
   static boolean writtenAfter(byte[] hutRowKey, long startTsInclusive) {
     long startInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
     return startTsInclusive <= startInterval;
+  }
+
+  static boolean writtenBetween(byte[] hutRowKey, long startTsInclusive, long stopTsInclusive) {
+    long rowStartInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long rowStopInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
+    return startTsInclusive <= rowStartInterval &&
+            (NOT_SET_MARK_VAL == rowStopInterval ? stopTsInclusive >= rowStartInterval : stopTsInclusive >= rowStopInterval);
   }
 }

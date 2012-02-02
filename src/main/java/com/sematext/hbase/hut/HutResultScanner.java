@@ -369,19 +369,34 @@ public class HutResultScanner implements ResultScanner {
     }
   }
 
-  private void storeProcessedUpdates(Result first, Result last) throws IOException {
-    byte[] firstRow = first.getRow();
+  private void storeProcessedUpdates(Result processingResult, Result last) throws IOException {
+    // processing result was stored in the first record of the processed interval,
+    // hence we can utilize its write time as start time for the compressed interval
+    byte[] firstRow = processingResult.getRow();
+    byte[] lastRow = last.getRow();
+
+    // adjusting row, so that it "covers" interval from first record to last record
     byte[] row = Arrays.copyOf(firstRow, firstRow.length);
-    HutRowKeyUtil.setIntervalEnd(row, last.getRow()); // can row here remain the same?
-    Put put = new Put(row);
-    for (KeyValue kv : first.raw()) {
-      // overriding row TODO: do we need to invalidate row cache of kv here?
-      overrideRow(kv, row);
-      put.add(kv);
-    }
+    HutRowKeyUtil.setIntervalEnd(row, lastRow); // can row here remain the same?
+
+    Put put = createPutWithProcessedResult(processingResult, row);
 
     store(put);
-    deleteProcessedRecords(first.getRow(), last.getRow(), row);
+    deleteProcessedRecords(processingResult.getRow(), lastRow, row);
+  }
+
+  private Put createPutWithProcessedResult(Result processingResult, byte[] row) throws IOException {
+    Put put = new Put(row);
+    for (KeyValue kv : processingResult.raw()) {
+      // using copying here, otherwise processingResult is affected when its
+      // keyvalues are changed. TODO: think over better approach? Previously same kv was used and things went well
+      byte[] kvBytes = Arrays.copyOf(kv.getBuffer(), kv.getBuffer().length);
+      KeyValue toWrite = new KeyValue(kvBytes);
+      // overriding row TODO: do we need to invalidate row cache of kv here?
+      overrideRow(toWrite, row);
+      put.add(toWrite);
+    }
+    return put;
   }
 
   void store(Put put) throws IOException {

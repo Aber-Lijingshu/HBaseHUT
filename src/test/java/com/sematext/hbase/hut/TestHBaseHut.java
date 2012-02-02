@@ -34,16 +34,29 @@ import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * General unit-test for the whole concept 
+ * General unit-test for the whole concept
+ * TODO: split into multiple classes
  */
 public class TestHBaseHut {
-  private HBaseTestingUtility testingUtility;
   public static final byte[] SALE_CF = Bytes.toBytes("sale");
+  private static final String TABLE_NAME = "stock-market";
+  private HBaseTestingUtility testingUtility;
+  private HTable hTable;
 
   @Before
   public void before() throws Exception {
     testingUtility = new HBaseTestingUtility();
-    testingUtility.startMiniCluster();
+    testingUtility.startMiniZKCluster();
+    testingUtility.startMiniCluster(1);
+    hTable = testingUtility.createTable(Bytes.toBytes(TABLE_NAME), SALE_CF);
+  }
+
+  @After
+  public void after() throws IOException {
+    hTable = null;
+    testingUtility.shutdownMiniCluster();
+    testingUtility.shutdownMiniZKCluster();
+    testingUtility = null;
   }
 
   // Stores only last 5 stock prices
@@ -67,7 +80,8 @@ public class TestHBaseHut {
       }
       for (int i = 0; i < 5; i++) {
         // iterating backwards so that "lastPrice0" is set to the most recent one
-        byte[] price = lastPricesBuff[(lastIndex + 5 - i) % 5];
+        int index = (lastIndex + 5 - i) % 5;
+        byte[] price = lastPricesBuff[index];
         if (price != null) {
           processingResult.add(SALE_CF, Bytes.toBytes("lastPrice" + i), price);
         }
@@ -93,7 +107,6 @@ public class TestHBaseHut {
 
   @Test
   public void testSimpleScan() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
@@ -133,7 +146,6 @@ public class TestHBaseHut {
 
   @Test
   public void testSimpleScanWithCaching() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
@@ -173,7 +185,6 @@ public class TestHBaseHut {
 
   @Test
   public void testStoringProcessedUpdatesDuringScan() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
@@ -213,7 +224,6 @@ public class TestHBaseHut {
 
   @Test
   public void testUpdatesProcessingUtil() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
@@ -254,7 +264,6 @@ public class TestHBaseHut {
   // thus updates processing can be performed on per-region basis without breaking things
   @Test
   public void testProcessingUpdatesInSeparateIntervals() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
@@ -286,11 +295,6 @@ public class TestHBaseHut {
   // TODO: add more test-cases for MR job
   @Test
   public void testUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
-    String tableName = "stock-market";
-    HTable hTable = testingUtility.createTable(Bytes.toBytes(tableName), SALE_CF);
-    testingUtility.startMiniMapReduceCluster();
-
-
     try {
       // Writing data
       byte[] chrysler = Bytes.toBytes("chrysler");
@@ -315,9 +319,10 @@ public class TestHBaseHut {
       Configuration configuration = testingUtility.getConfiguration();
       configuration.set("hut.mr.buffer.size", String.valueOf(10));
       Job job = new Job(configuration);
-      UpdatesProcessingMrJob.initJob(tableName, new Scan(), StockSaleUpdateProcessor.class, job);
+      UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
 
-      job.waitForCompletion(true);
+      boolean success = job.waitForCompletion(true);
+      Assert.assertTrue(success);
 
       System.out.println(DebugUtil.getContent(hTable));
 
@@ -332,7 +337,6 @@ public class TestHBaseHut {
 
   @Test
   public void testDelete() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
@@ -365,7 +369,6 @@ public class TestHBaseHut {
 
   @Test
   public void testRollback() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
@@ -378,31 +381,34 @@ public class TestHBaseHut {
     recordSale(hTable, chrysler, 100);
     recordSale(hTable, ford, 18);
     recordSale(hTable, chrysler, 120);
+    long ts0 = System.currentTimeMillis();
+
     verifyLastSales(hTable, processor, chrysler, new int[] {120, 100, 90});
     verifyLastSales(hTable, processor, ford, new int[] {18});
 
-    long ts0 = System.currentTimeMillis();
-    
     recordSale(hTable, chrysler, 115);
     recordSale(hTable, ford, 22);
     recordSale(hTable, chrysler, 110);
+    long ts1 = System.currentTimeMillis();
+
     verifyLastSales(hTable, processor, chrysler, new int[] {110, 115, 120, 100, 90});
     verifyLastSales(hTable, processor, ford, new int[] {22, 18});
 
-    long ts1 = System.currentTimeMillis();
 
     recordSale(hTable, chrysler, 105);
     recordSale(hTable, ford, 24);
     recordSale(hTable, ford, 28);
+    long ts2 = System.currentTimeMillis();
+
     verifyLastSales(hTable, processor, chrysler, new int[] {105, 110, 115, 120, 100});
     verifyLastSales(hTable, processor, ford, new int[] {28, 24, 22, 18});
-
-    long ts2 = System.currentTimeMillis();
 
     recordSale(hTable, chrysler, 107);
     recordSale(hTable, ford, 32);
     recordSale(hTable, ford, 40);
     recordSale(hTable, chrysler, 113);
+    long ts3 = System.currentTimeMillis();
+
     verifyLastSales(hTable, processor, chrysler, new int[] {113, 107, 105, 110, 115});
     verifyLastSales(hTable, processor, ford, new int[] {40, 32, 28, 24, 22});
 
@@ -422,13 +428,88 @@ public class TestHBaseHut {
     verifyLastSales(hTable, processor, chrysler, new int[]{105, 110, 115, 120, 100});
     verifyLastSales(hTable, processor, ford, new int[] {28, 24, 22, 18});
 
-    UpdatesProcessingUtil.rollbackWrittenAfter(hTable, ts0);
+    System.out.println(DebugUtil.getContent(hTable));
+
+    UpdatesProcessingUtil.rollbackWrittenBetween(hTable, ts0, ts3);
+    verifyLastSales(hTable, processor, chrysler, new int[] {105, 120, 100, 90});
+    verifyLastSales(hTable, processor, ford, new int[]{28, 24, 18});
+
+    hTable.close();
+  }
+
+  @Test
+  public void testRollbackWithMr() throws IOException, InterruptedException, ClassNotFoundException {
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+
+    // Writing data
+    byte[] chrysler = Bytes.toBytes("chrysler");
+    byte[] ford = Bytes.toBytes("ford");
+
+    verifyLastSales(hTable, processor, chrysler, new int[] {});
+    verifyLastSales(hTable, processor, ford, new int[] {});
+    recordSale(hTable, chrysler, 90);
+    recordSale(hTable, chrysler, 100);
+    recordSale(hTable, ford, 18);
+    recordSale(hTable, chrysler, 120);
+    long ts0 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, chrysler, new int[] {120, 100, 90});
+    verifyLastSales(hTable, processor, ford, new int[] {18});
+
+    recordSale(hTable, chrysler, 115);
+    recordSale(hTable, ford, 22);
+    recordSale(hTable, chrysler, 110);
+    long ts1 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, chrysler, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, ford, new int[] {22, 18});
+
+    recordSale(hTable, chrysler, 105);
+    recordSale(hTable, ford, 24);
+    recordSale(hTable, ford, 28);
+    long ts2 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, chrysler, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, ford, new int[] {28, 24, 22, 18});
+
+    recordSale(hTable, chrysler, 107);
+    recordSale(hTable, ford, 32);
+    recordSale(hTable, ford, 40);
+    recordSale(hTable, chrysler, 113);
+    verifyLastSales(hTable, processor, chrysler, new int[] {113, 107, 105, 110, 115});
+    verifyLastSales(hTable, processor, ford, new int[] {40, 32, 28, 24, 22});
+
+    System.out.println(DebugUtil.getContent(hTable));
+
+    // rolling back writes from ts1 to ts2
+    Job job = RollbackUpdatesMrJob.createSubmittableJob(testingUtility.getConfiguration(),
+                                                        new String[] {TABLE_NAME,
+                                                                String.valueOf(ts1), String.valueOf(ts2)});
+    boolean success = job.waitForCompletion(true);
+    Assert.assertTrue(success);
+
+    System.out.println(DebugUtil.getContent(hTable));
+
+    verifyLastSales(hTable, processor, chrysler, new int[] {113, 107, 110, 115, 120});
+    verifyLastSales(hTable, processor, ford, new int[] {40, 32, 22, 18});
+
+    // writing more data and rolling back to ts0
+    recordSale(hTable, chrysler, 105);
+    recordSale(hTable, ford, 24);
+    recordSale(hTable, ford, 28);
+    verifyLastSales(hTable, processor, chrysler, new int[]{105, 113, 107, 110, 115});
+    verifyLastSales(hTable, processor, ford, new int[] {28, 24, 40, 32, 22});
+
+    job = RollbackUpdatesMrJob.createSubmittableJob(testingUtility.getConfiguration(),
+            new String[]{TABLE_NAME, String.valueOf(ts0)});
+    success = job.waitForCompletion(true);
+    Assert.assertTrue(success);
+
     verifyLastSales(hTable, processor, chrysler, new int[] {120, 100, 90});
     verifyLastSales(hTable, processor, ford, new int[]{18});
 
     hTable.close();
   }
-
 
   private static void performUpdatesProcessingButWithoutDeletionOfProcessedRecords(final HTable hTable, UpdateProcessor updateProcessor) throws IOException {
     ResultScanner resultScanner =
@@ -457,8 +538,9 @@ public class TestHBaseHut {
   }
 
   private static void verifyLastSales(HTable hTable, UpdateProcessor updateProcessor, byte[] company, int[] prices) throws IOException {
+    ResultScanner scanner = hTable.getScanner(getCompanyScan(company));
     ResultScanner resultScanner =
-            new HutResultScanner(hTable.getScanner(getCompanyScan(company)), updateProcessor);
+            new HutResultScanner(scanner, updateProcessor);
     Result result = resultScanner.next();
     verifyLastSales(result, prices);
   }
@@ -502,11 +584,5 @@ public class TestHBaseHut {
         Assert.assertNull(lastStoredPrice);
       }
     }
-  }
-
-  @After
-  public void after() throws IOException {
-    testingUtility.shutdownMiniCluster();
-    testingUtility = null;
   }
 }

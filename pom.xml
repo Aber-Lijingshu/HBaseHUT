@@ -14,12 +14,11 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compile.source>1.6</maven.compile.source>
     <maven.compile.target>1.6</maven.compile.target>
-    <hadoop.version>0.20.2-cdh3u1</hadoop.version>
-    <hbase.version>0.90.3-cdh3u1</hbase.version>
+    <hadoop.version>0.20.2-cdh3u3</hadoop.version>
+    <hbase.version>0.90.4-cdh3u3</hbase.version>
     <log4j.version>1.2.16</log4j.version>
     <junit.version>[4.8.2,5.0.0)</junit.version>
     <slf4j.version>1.6.1</slf4j.version>
-    <guava.version>r09</guava.version>
     <commons-logging.version>1.1.1</commons-logging.version>
     <junit.version>4.5</junit.version>
     <easymock.version>2.4</easymock.version>
@@ -215,12 +214,6 @@
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-log4j12</artifactId>
       <version>${slf4j.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.google.guava</groupId>
-      <artifactId>guava</artifactId>
-      <version>${guava.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>

@@ -38,7 +38,11 @@ public class HutPut extends Put {
     super(putToCopy);
   }
 
-  private static byte[] adjustRow(byte[] row) {
-    return HutRowKeyUtil.createNewKey(row, System.currentTimeMillis());
+  public static byte[] adjustRow(byte[] row) {
+    return adjustRow(row, System.currentTimeMillis());
+  }
+
+  public static byte[] adjustRow(byte[] row, long recordWriteTime) {
+    return HutRowKeyUtil.createNewKey(row, recordWriteTime);
   }
 }
