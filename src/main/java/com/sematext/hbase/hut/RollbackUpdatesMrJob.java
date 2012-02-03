@@ -135,8 +135,8 @@ public final class RollbackUpdatesMrJob {
     if (errorMsg != null && errorMsg.length() > 0) {
       System.err.println("ERROR: " + errorMsg);
     }
-    System.err.println("Usage: RollbackUpdatesMrJob [-D <property=value>]* <tablename> [<versions> " +
-      "[<starttime inclusive> [<endtime inclusive>]]]\n");
+    System.err.println("Usage: RollbackUpdatesMrJob [-D <property=value>]* <tablename> " +
+      "[<starttime inclusive> [<endtime inclusive>]]\n");
     System.err.println("  Note: -D properties will be applied to the conf used. ");
     System.err.println("  For example: ");
     System.err.println("   -D mapred.output.compress=true");
