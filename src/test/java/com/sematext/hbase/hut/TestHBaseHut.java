@@ -335,6 +335,55 @@ public class TestHBaseHut {
     }
   }
 
+
+  // TODO: add more test-cases for MR job
+  @Test
+  public void testPartialUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
+    try {
+      // Writing data
+      byte[] chrysler = Bytes.toBytes("chrysler");
+      byte[] ford = Bytes.toBytes("ford");
+      byte[] toyota = Bytes.toBytes("toyota");
+
+      for (int i = 0; i < 15; i++) {
+        byte[] company;
+        if (i % 2 == 0) {
+          company = ford;
+        } else {
+          company = chrysler;
+        }
+
+        recordSale(hTable, company, i);
+
+        Thread.sleep(200);
+      }
+
+      recordSale(hTable, toyota, 23);
+
+      System.out.println(DebugUtil.getContent(hTable));
+
+      Configuration configuration = testingUtility.getConfiguration();
+      configuration.set("hut.mr.buffer.size", String.valueOf(10));
+      configuration.set("hut.processor.tsMod", String.valueOf(300));
+      Job job = new Job(configuration);
+      UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
+
+      boolean success = job.waitForCompletion(true);
+      Assert.assertTrue(success);
+
+      // TODO: add code verification of proper partial compaction instead of manually observing in output
+      System.out.println(DebugUtil.getContent(hTable));
+
+      StockSaleUpdateProcessor updateProcessor = new StockSaleUpdateProcessor();
+      verifyLastSalesWithCompation(hTable, updateProcessor, ford, new int[]{14, 12, 10, 8, 6});
+      verifyLastSalesWithCompation(hTable, updateProcessor, chrysler, new int[]{13, 11, 9, 7, 5});
+      verifyLastSalesWithCompation(hTable, updateProcessor, toyota, new int[]{23});
+
+    } finally { // TODO: do we really need try/finally block here?
+      testingUtility.shutdownMiniMapReduceCluster();
+    }
+  }
+
   @Test
   public void testDelete() throws IOException, InterruptedException {
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();

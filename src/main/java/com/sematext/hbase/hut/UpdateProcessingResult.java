@@ -15,10 +15,26 @@
  */
 package com.sematext.hbase.hut;
 
+import org.apache.hadoop.hbase.KeyValue;
+
 /**
  * Defines processing result
  */
 public interface UpdateProcessingResult {
   public void add(byte[] colFam, byte[] qualifier, byte[] value);
   public void delete(byte[] colFam, byte[] qualifier);
+
+  /**
+   * Adds keyValues to the result.
+   * NOTE: will work only when keyValues have the same row key length as the records being processed
+   * @param kvs keyValues to add
+   */
+  void add(KeyValue[] kvs);
+
+  /**
+   * Adds keyValue to the result.
+   * NOTE: will work only when keyValue has the same row key length as the records being processed
+   * @param kvToAdd keyValue to add
+   */
+  void add(KeyValue kvToAdd);
 }

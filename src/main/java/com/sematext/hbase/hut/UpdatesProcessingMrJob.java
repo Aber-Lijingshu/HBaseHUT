@@ -27,6 +27,7 @@ import org.apache.hadoop.hbase.mapreduce.HRegionPartitioner;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapper;
 import org.apache.hadoop.hbase.mapreduce.TableReducer;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.mapreduce.Job;
 
 import java.io.IOException;
@@ -48,6 +49,7 @@ public final class UpdatesProcessingMrJob {
   public static class UpdatesProcessingMapper extends TableMapper<ImmutableBytesWritable, Put> {
     public static final String HUT_MR_BUFFER_SIZE_ATTR = "hut.mr.buffer.size";
     public static final String HUT_PROCESSOR_CLASS_ATTR = "hut.processor.class";
+    public static final String HUT_PROCESSOR_TSMOD_ATTR = "hut.processor.tsMod";
     private static final Log LOG = LogFactory.getLog(UpdatesProcessingMapper.class);
 
     // buffer for items read by map()
@@ -56,6 +58,9 @@ public final class UpdatesProcessingMrJob {
     // these two volatile variables needed to provide visibility of changes made by two threads
     private volatile int filledInBuff;
     private volatile int nextInBuff;
+
+    // TODO: describe
+    private long tsMod = 1; // can be overridden by HUT_PROCESSOR_TSMOD_ATTR attribute in configuration
 
     private Thread processingThread;
 
@@ -67,6 +72,7 @@ public final class UpdatesProcessingMrJob {
     private volatile boolean failed;
     private volatile boolean finished;
 
+    // TODO: correct the comment? " *not* going to be accessed..." ?
     // No need to make buff operations thread-safe as buffer is going to accessed from single thread at a time
     private boolean isBufferExhausted() {
       return filledInBuff - nextInBuff <= 0;
@@ -100,6 +106,15 @@ public final class UpdatesProcessingMrJob {
 
       public DetachedHutResultScanner(UpdateProcessor updateProcessor) {
         super(null, updateProcessor, null, true);
+      }
+
+      @Override
+      protected boolean isMergeNeeded(byte[] firstKey, byte[] secondKey) {
+        if (tsMod <= 1) {
+          return super.isMergeNeeded(firstKey, secondKey);
+        } else {
+          return HutRowKeyUtil.sameOriginalKeys(firstKey, secondKey, tsMod);
+        }
       }
 
       @Override
@@ -178,7 +193,18 @@ public final class UpdatesProcessingMrJob {
         }
       }
 
+      pingMap(context);
       pushToBuff(value);
+    }
+
+    private long lastPingTimeMap = System.currentTimeMillis();
+
+    public void pingMap(Context context) {
+      final long currtime = System.currentTimeMillis();
+      if (currtime - lastPingTimeMap > 2000) {
+        context.progress();
+        lastPingTimeMap = currtime;
+      }
     }
 
     @Override
@@ -190,12 +216,25 @@ public final class UpdatesProcessingMrJob {
         throw new IllegalStateException("hut.processor.class missed in the configuration");
       }
       final UpdateProcessor updateProcessor = createInstance(updatesProcessorClass, UpdateProcessor.class);
+      LOG.info("Using updateProcessor: " + updateProcessor.getClass());
+      if (updateProcessor instanceof Configurable) {
+        ((Configurable) updateProcessor).configure(context.getConfiguration());
+      }
 
       String bufferSizeValue =  context.getConfiguration().get(HUT_MR_BUFFER_SIZE_ATTR);
       if (bufferSizeValue == null) {
         LOG.info(HUT_MR_BUFFER_SIZE_ATTR + " is missed in the configuration, using default value: " + bufferMaxSize);
       } else {
         bufferMaxSize = Integer.valueOf(bufferSizeValue);
+        LOG.info("Using bufferMaxSize: " + bufferMaxSize);
+      }
+
+      String tsModValue =  context.getConfiguration().get(HUT_PROCESSOR_TSMOD_ATTR);
+      if (tsModValue == null) {
+        LOG.info(HUT_PROCESSOR_TSMOD_ATTR + " is missed in the configuration, using default value: " + tsMod);
+      } else {
+        tsMod = Long.valueOf(tsModValue);
+        LOG.info("Using tsMod: " + tsMod);
       }
 
       buff = new Result[bufferMaxSize];
@@ -325,5 +364,6 @@ public final class UpdatesProcessingMrJob {
     job.setJarByClass(UpdatesProcessingMrJob.class);
     job.getConfiguration().set(UpdatesProcessingReducer.HTABLE_ATTR_NAME, table);
     job.getConfiguration().set(UpdatesProcessingMapper.HUT_PROCESSOR_CLASS_ATTR, updateProcessorClass.getName());
+    job.getConfiguration().set("mapred.map.tasks.speculative.execution", "false"); // TODO: explain
   }
 }

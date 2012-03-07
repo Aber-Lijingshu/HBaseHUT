@@ -36,8 +36,24 @@ public final class HutRowKeyUtil {
   }
 
   static boolean sameOriginalKeys(byte[] hutRowKey1, byte[] hutRowKey2) {
+    // TODO: review whether we need *lexographic* comparison
     return 0 == Bytes.compareTo(hutRowKey1, 0, hutRowKey1.length - Bytes.SIZEOF_LONG * 2,
                                 hutRowKey2, 0, hutRowKey2.length - Bytes.SIZEOF_LONG * 2);
+  }
+
+  // TODO: add unit-test
+  static boolean sameOriginalKeys(byte[] hutRowKey1, byte[] hutRowKey2, long mod) {
+    if (0 != Bytes.compareTo(hutRowKey1, 0, hutRowKey1.length - Bytes.SIZEOF_LONG * 2,
+                                hutRowKey2, 0, hutRowKey2.length - Bytes.SIZEOF_LONG * 2)) {
+      return false;
+    }
+
+    long firstKeyIntervalStart = Bytes.toLong(hutRowKey1,
+            hutRowKey1.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long secondKeyIntervalStart = Bytes.toLong(hutRowKey2,
+            hutRowKey2.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+
+    return (firstKeyIntervalStart / mod) == (secondKeyIntervalStart / mod);
   }
 
   // TODO: rename it or explain
