@@ -60,7 +60,7 @@ public final class UpdatesProcessingMrJob {
     private volatile int nextInBuff;
 
     // TODO: describe
-    private long tsMod = 1; // can be overridden by HUT_PROCESSOR_TSMOD_ATTR attribute in configuration
+    private long tsMod = 0; // can be overridden by HUT_PROCESSOR_TSMOD_ATTR attribute in configuration
 
     private Thread processingThread;
 
@@ -110,7 +110,7 @@ public final class UpdatesProcessingMrJob {
 
       @Override
       protected boolean isMergeNeeded(byte[] firstKey, byte[] secondKey) {
-        if (tsMod <= 1) {
+        if (tsMod <= 0) {
           return super.isMergeNeeded(firstKey, secondKey);
         } else {
           return HutRowKeyUtil.sameOriginalKeys(firstKey, secondKey, tsMod);
