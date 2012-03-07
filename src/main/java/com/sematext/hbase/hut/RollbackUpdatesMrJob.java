@@ -95,6 +95,9 @@ public final class RollbackUpdatesMrJob {
   public static Job createSubmittableJob(Configuration conf, String[] args)
   throws IOException {
     String tableName = args[0];
+
+    conf.set("mapred.map.tasks.speculative.execution", "false");
+
     Job job = new Job(conf, NAME + "_" + tableName);
     job.setJobName(NAME + "_" + tableName);
     job.setJarByClass(RollbackUpdatesMapper.class);
@@ -111,6 +114,10 @@ public final class RollbackUpdatesMrJob {
     job.getConfiguration().set(RollbackUpdatesMapper.HUT_ROLLBACK_UPDATE_MAX_TIME_ATTR, String.valueOf(endTime));
 
     s.setCacheBlocks(false);
+    // TODO: allow user change using job params
+    s.setCaching(512);
+
+    LOG.info("Using scan: " + s.toString());
 
     // TODO: allow better limiting of data to be fetched
     if (conf.get(TableInputFormat.SCAN_COLUMN_FAMILY) != null) {
