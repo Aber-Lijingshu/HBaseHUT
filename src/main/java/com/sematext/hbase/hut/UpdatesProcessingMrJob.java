@@ -217,8 +217,13 @@ public final class UpdatesProcessingMrJob {
       }
       final UpdateProcessor updateProcessor = createInstance(updatesProcessorClass, UpdateProcessor.class);
       LOG.info("Using updateProcessor: " + updateProcessor.getClass());
+
       if (updateProcessor instanceof Configurable) {
         ((Configurable) updateProcessor).configure(context.getConfiguration());
+      }
+
+      if (updateProcessor instanceof MapContextAware) {
+        ((MapContextAware) updateProcessor).setContext(context);
       }
 
       String bufferSizeValue =  context.getConfiguration().get(HUT_MR_BUFFER_SIZE_ATTR);
