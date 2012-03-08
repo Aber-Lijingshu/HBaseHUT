@@ -20,7 +20,7 @@ import org.apache.hadoop.hbase.client.Result;
 /**
  * Performs simple processing of records: just adds all columns from records to the result one.
  */
-public class SimpleAddCellsProcessor implements UpdateProcessor {
+public class SimpleAddCellsProcessor extends UpdateProcessor {
   @Override
   public void process(Iterable<Result> records, UpdateProcessingResult processingResult) {
     for (Result record : records) {

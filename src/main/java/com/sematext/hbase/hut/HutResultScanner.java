@@ -86,17 +86,29 @@ public class HutResultScanner implements ResultScanner {
     }
 
     iterableRecords.init(firstResult, nextToFirstResult);
-    processingResult.init(firstResult.getRow(), firstResult.raw());
-    updateProcessor.process(iterableRecords, processingResult);
+    // TODO: allow decide to skip merging at processing time
+
+    Result result;
+    // hook for fastforwarding thru records with particular original key in case no need to merge them
+    // TODO: modify API of processor to return true/false instead of extra method?
+    // TODO: adjust API of updateProcessor.isMergeNeeded method (add offset/length params) to avoid creating extra objects
+    if (updateProcessor.isMergeNeeded(HutRowKeyUtil.getOriginalKey(firstResult.getRow()))) {
+      processingResult.init(firstResult.getRow(), firstResult.raw());
+      updateProcessor.process(iterableRecords, processingResult);
+
+      result = processingResult.getResult();
+      if (storeProcessedUpdates) {
+        storeProcessedUpdates(result, iterableRecords.iterator.lastRead);
+      }
+    } else {
+      // actually this should be ignored, as the hook for skipping processing is for compaction job only
+      result = firstResult;
+    }
+
     // TODO: allow client code specify skipping this?
     // Reading records of this group to the end
     while (iterableRecords.iterator.hasNext()) {
       iterableRecords.iterator.next();
-    }
-
-    Result result = processingResult.getResult();
-    if (storeProcessedUpdates) {
-      storeProcessedUpdates(result, iterableRecords.iterator.lastRead);
     }
 
     return result;
