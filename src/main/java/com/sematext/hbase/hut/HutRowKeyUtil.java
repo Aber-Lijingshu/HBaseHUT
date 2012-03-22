@@ -50,10 +50,20 @@ public final class HutRowKeyUtil {
 
     long firstKeyIntervalStart = Bytes.toLong(hutRowKey1,
             hutRowKey1.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long firstKeyIntervalStop = Bytes.toLong(hutRowKey1,
+            hutRowKey1.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
     long secondKeyIntervalStart = Bytes.toLong(hutRowKey2,
             hutRowKey2.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long secondKeyIntervalStop = Bytes.toLong(hutRowKey2,
+            hutRowKey2.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
 
-    return (firstKeyIntervalStart / mod) == (secondKeyIntervalStart / mod);
+    boolean same = (firstKeyIntervalStart / mod) == (secondKeyIntervalStart / mod);
+    same = firstKeyIntervalStop == NOT_SET_MARK_VAL ? same :
+            same && (firstKeyIntervalStart / mod) == (firstKeyIntervalStop / mod);
+    same = secondKeyIntervalStop == NOT_SET_MARK_VAL ? same :
+            same && (secondKeyIntervalStart / mod) == (secondKeyIntervalStop / mod);
+
+    return same;
   }
 
   // TODO: rename it or explain
