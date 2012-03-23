@@ -14,8 +14,8 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compile.source>1.6</maven.compile.source>
     <maven.compile.target>1.6</maven.compile.target>
-    <hadoop.version>0.20.2-cdh3u3</hadoop.version>
-    <hbase.version>0.90.4-cdh3u3</hbase.version>
+    <hadoop.version>1.0.0</hadoop.version>
+    <hbase.version>0.92.1</hbase.version>
     <log4j.version>1.2.16</log4j.version>
     <junit.version>[4.8.2,5.0.0)</junit.version>
     <slf4j.version>1.6.1</slf4j.version>
@@ -67,9 +67,8 @@
 
   <repositories>
     <repository>
-      <id>cloudera</id>
-      <name>Cloudera Repository</name>
-      <url>https://repository.cloudera.com/content/groups/public/</url>
+      <id>apache release</id>
+      <url>https://repository.apache.org/content/repositories/releases/</url>
     </repository>
   </repositories>
 
@@ -81,12 +80,12 @@
       <scope>provided</scope>
       <exclusions>
         <exclusion>
-          <groupId>commons-httpclient</groupId>
-          <artifactId>commons-httpclient</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+          <artifactId>jackson-mapper-asl</artifactId>
         </exclusion>
         <exclusion>
-          <groupId>org.apache.tomcat</groupId>
-          <artifactId>jasper</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+          <artifactId>jackson-core-asl</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
@@ -95,36 +94,6 @@
       <artifactId>hbase</artifactId>
       <version>${hbase.version}</version>
       <scope>provided</scope>
-      <exclusions>
-        <exclusion>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-core</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.avro</groupId>
-          <artifactId>avro</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.sun.jersey</groupId>
-          <artifactId>jersey-core</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.sun.jersey</groupId>
-          <artifactId>jersey-json</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.sun.jersey</groupId>
-          <artifactId>jersey-server</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.thrift</groupId>
-          <artifactId>thrift</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>log4j</groupId>
-          <artifactId>log4j</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
 
     <dependency>
@@ -140,20 +109,6 @@
       <artifactId>hadoop-test</artifactId>
       <version>${hadoop.version}</version>
       <scope>test</scope>
-      <exclusions>
-        <exclusion>
-          <artifactId>ftpserver-core</artifactId>
-          <groupId>org.apache.ftpserver</groupId>
-        </exclusion>
-        <exclusion>
-          <artifactId>ftplet-api</artifactId>
-          <groupId>org.apache.ftpserver</groupId>
-        </exclusion>
-        <exclusion>
-          <artifactId>ftpserver-deprecated</artifactId>
-          <groupId>org.apache.ftpserver</groupId>
-        </exclusion>
-      </exclusions>
     </dependency>
     <dependency>
       <groupId>org.apache.hbase</groupId>
@@ -161,36 +116,6 @@
       <version>${hbase.version}</version>
       <classifier>tests</classifier>
       <scope>test</scope>
-      <exclusions>
-        <exclusion>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-core</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.avro</groupId>
-          <artifactId>avro</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.sun.jersey</groupId>
-          <artifactId>jersey-core</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.sun.jersey</groupId>
-          <artifactId>jersey-json</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.sun.jersey</groupId>
-          <artifactId>jersey-server</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.thrift</groupId>
-          <artifactId>thrift</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>log4j</groupId>
-          <artifactId>log4j</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
     <dependency>
       <groupId>junit</groupId>

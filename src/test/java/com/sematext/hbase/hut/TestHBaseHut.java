@@ -43,22 +43,19 @@ public class TestHBaseHut {
   private static final byte[] CHRYSLER = Bytes.toBytes("chrysler");
   private static final byte[] FORD = Bytes.toBytes("ford");
   private static final byte[] TOYOTA = Bytes.toBytes("toyota");
-  private HBaseTestingUtility testingUtility;
+  private HBaseTestingUtility testingUtility = new HBaseTestingUtility();
   private HTable hTable;
 
   @Before
   public void before() throws Exception {
-    testingUtility = new HBaseTestingUtility();
-    testingUtility.startMiniZKCluster();
-    testingUtility.startMiniCluster(1);
+    testingUtility.startMiniCluster();
     hTable = testingUtility.createTable(Bytes.toBytes(TABLE_NAME), SALE_CF);
   }
 
   @After
-  public void after() throws IOException {
+  public void after() throws Exception {
     hTable = null;
     testingUtility.shutdownMiniCluster();
-    testingUtility.shutdownMiniZKCluster();
     testingUtility = null;
   }
 
@@ -282,36 +279,30 @@ public class TestHBaseHut {
   // TODO: add more test-cases for MR job
   @Test
   public void testUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
-    try {
-      int mapBufferSize;
-      for (mapBufferSize = 1; mapBufferSize < 6; mapBufferSize++) {
-        writeFordAndChryslerData();
-        processUpdatesWithMrJob(mapBufferSize);
-        verifyLastFordAndChryslerSalesWithNativeScanner();
-      }
-
-      mapBufferSize = 10;
+    int mapBufferSize;
+    for (mapBufferSize = 1; mapBufferSize < 6; mapBufferSize++) {
       writeFordAndChryslerData();
       processUpdatesWithMrJob(mapBufferSize);
       verifyLastFordAndChryslerSalesWithNativeScanner();
-
-      mapBufferSize = 20;
-      writeFordAndChryslerData();
-      processUpdatesWithMrJob(mapBufferSize);
-      verifyLastFordAndChryslerSalesWithNativeScanner();
-
-      // Testing one more time now with record in the end of table which is not compacted
-      DebugUtil.clean(hTable);
-      writeFordAndChryslerData();
-      recordSale(hTable, TOYOTA, 23);
-      processUpdatesWithMrJob(4);
-      verifyLastFordAndChryslerSalesWithNativeScanner();
-      verifyLastSalesWithNativeScanner(hTable, TOYOTA, new int[] {23});
-
-
-    } finally { // TODO: do we really need try/finally block here?
-      testingUtility.shutdownMiniMapReduceCluster();
     }
+
+    mapBufferSize = 10;
+    writeFordAndChryslerData();
+    processUpdatesWithMrJob(mapBufferSize);
+    verifyLastFordAndChryslerSalesWithNativeScanner();
+
+    mapBufferSize = 20;
+    writeFordAndChryslerData();
+    processUpdatesWithMrJob(mapBufferSize);
+    verifyLastFordAndChryslerSalesWithNativeScanner();
+
+    // Testing one more time now with record in the end of table which is not compacted
+    DebugUtil.clean(hTable);
+    writeFordAndChryslerData();
+    recordSale(hTable, TOYOTA, 23);
+    processUpdatesWithMrJob(4);
+    verifyLastFordAndChryslerSalesWithNativeScanner();
+    verifyLastSalesWithNativeScanner(hTable, TOYOTA, new int[] {23});
   }
 
   private void processUpdatesWithMrJob(int mapBufferSize) throws IOException, InterruptedException, ClassNotFoundException {
@@ -349,45 +340,40 @@ public class TestHBaseHut {
   // TODO: add more test-cases for MR job
   @Test
   public void testPartialUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
-    try {
-      // Writing data
-      for (int i = 0; i < 15; i++) {
-        byte[] company;
-        if (i % 2 == 0) {
-          company = FORD;
-        } else {
-          company = CHRYSLER;
-        }
-
-        recordSale(hTable, company, i);
-
-        Thread.sleep(200);
+    // Writing data
+    for (int i = 0; i < 15; i++) {
+      byte[] company;
+      if (i % 2 == 0) {
+        company = FORD;
+      } else {
+        company = CHRYSLER;
       }
 
-      recordSale(hTable, TOYOTA, 23);
+      recordSale(hTable, company, i);
 
-      System.out.println(DebugUtil.getContentAsText(hTable));
-
-      Configuration configuration = testingUtility.getConfiguration();
-      configuration.set("hut.mr.buffer.size", String.valueOf(10));
-      configuration.set("hut.processor.tsMod", String.valueOf(300));
-      Job job = new Job(configuration);
-      UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
-
-      boolean success = job.waitForCompletion(true);
-      Assert.assertTrue(success);
-
-      // TODO: add code verification of proper partial compaction instead of manually observing in output
-      System.out.println(DebugUtil.getContentAsText(hTable));
-
-      StockSaleUpdateProcessor updateProcessor = new StockSaleUpdateProcessor();
-      verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
-      verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
-      verifyLastSalesWithCompation(hTable, updateProcessor, TOYOTA, new int[]{23});
-
-    } finally { // TODO: do we really need try/finally block here?
-      testingUtility.shutdownMiniMapReduceCluster();
+      Thread.sleep(200);
     }
+
+    recordSale(hTable, TOYOTA, 23);
+
+    System.out.println(DebugUtil.getContentAsText(hTable));
+
+    Configuration configuration = testingUtility.getConfiguration();
+    configuration.set("hut.mr.buffer.size", String.valueOf(10));
+    configuration.set("hut.processor.tsMod", String.valueOf(300));
+    Job job = new Job(configuration);
+    UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
+
+    boolean success = job.waitForCompletion(true);
+    Assert.assertTrue(success);
+
+    // TODO: add code verification of proper partial compaction instead of manually observing in output
+    System.out.println(DebugUtil.getContentAsText(hTable));
+
+    StockSaleUpdateProcessor updateProcessor = new StockSaleUpdateProcessor();
+    verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
+    verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
+    verifyLastSalesWithCompation(hTable, updateProcessor, TOYOTA, new int[]{23});
   }
 
   @Test
