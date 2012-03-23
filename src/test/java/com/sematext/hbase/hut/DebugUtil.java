@@ -15,6 +15,7 @@
  */
 package com.sematext.hbase.hut;
 
+import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
@@ -34,28 +35,32 @@ public final class DebugUtil {
 
   public DebugUtil() {}
 
-  public static String getContent(HTable t) throws IOException {
+  public static String getContentAsText(HTable t) throws IOException {
     ResultScanner rs = t.getScanner(new Scan());
     Result next = rs.next();
     int readCount = 0;
     StringBuilder contentText = new StringBuilder();
     while (next != null && readCount < 1000) {
-      contentText.append(getHutRowKeyAsText(next.getRow()));
-      for (Map.Entry<byte[], NavigableMap<byte[], NavigableMap<Long, byte[]>>> cf : next.getMap().entrySet()) {
-        for (Map.Entry<byte[], NavigableMap<Long, byte[]>> c : cf.getValue().entrySet()) {
-          byte[] value = c.getValue().values().iterator().next();
-          contentText.append(C_DEL);
-          contentText.append(Bytes.toString(cf.getKey())).append(CF_DEL)
-                  .append(Bytes.toString(c.getKey())).append(VAL_DEL)
-                  .append(getText(value));
-        }
-      }
+      append(contentText, next);
       contentText.append("\n");
       next = rs.next();
       readCount++;
     }
 
     return contentText.toString();
+  }
+
+  public static void append(StringBuilder contentText, Result next) {
+    contentText.append(getHutRowKeyAsText(next.getRow()));
+    for (Map.Entry<byte[], NavigableMap<byte[], NavigableMap<Long, byte[]>>> cf : next.getMap().entrySet()) {
+      for (Map.Entry<byte[], NavigableMap<Long, byte[]>> c : cf.getValue().entrySet()) {
+        byte[] value = c.getValue().values().iterator().next();
+        contentText.append(C_DEL);
+        contentText.append(Bytes.toString(cf.getKey())).append(CF_DEL)
+                .append(Bytes.toString(c.getKey())).append(VAL_DEL)
+                .append(getText(value));
+      }
+    }
   }
 
   private static String getHutRowKeyAsText(byte[] row) {
@@ -77,4 +82,15 @@ public final class DebugUtil {
       return Bytes.toString(data);
     }
   }
+
+  public static void clean(HTable t) throws IOException {
+    // TODO: do HBaseAdmin.deleteTable() instead?
+    ResultScanner rs = t.getScanner(new Scan());
+    Result next = rs.next();
+    while (next != null) {
+      t.delete(new Delete(next.getRow())); // TODO: delete in batches?
+      next = rs.next();
+    }
+  }
+
 }

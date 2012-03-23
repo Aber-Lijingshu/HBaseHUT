@@ -23,11 +23,6 @@
 -->
 <configuration>
   <property>
-    <name>hadoop.log.dir</name>
-    <value>/tmp/logs</value>
-  </property>
-
-  <property>
     <name>hbase.zookeeper.property.clientPort</name>
     <value>21818</value>
   </property>
