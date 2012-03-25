@@ -15,8 +15,10 @@
  */
 package com.sematext.hbase.hut;
 
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
@@ -24,6 +26,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Provides utility methods on top of {@link org.apache.hadoop.hbase.client.HTable}
@@ -94,6 +97,16 @@ final class HTableUtil {
     if (listToDelete.size() > 0) {
       hTable.delete(listToDelete);
     }
+  }
+
+  public static Result convert(Put put) {
+    List<KeyValue> kvs = new ArrayList<KeyValue>();
+    for (List<KeyValue> l : put.getFamilyMap().values()) {
+      kvs.addAll(l);
+    }
+    Result result = new Result(kvs);
+
+    return result;
   }
 
   private static Scan getDeleteScan(byte[] firstInclusive, byte[] lastNonInclusive) {

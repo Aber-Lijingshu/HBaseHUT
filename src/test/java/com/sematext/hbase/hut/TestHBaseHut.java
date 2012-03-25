@@ -558,6 +558,51 @@ public class TestHBaseHut {
     hTable.close();
   }
 
+  // TODO: this is the simplest test for BufferedHutPutWriter, add more
+  @Test
+  public void testBufferedHutPutWriter() throws IOException, InterruptedException {
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+    BufferedHutPutWriter writer = new BufferedHutPutWriter(hTable, processor, 6);
+
+    // Writing data
+    writer.write(createPut(CHRYSLER, 90));
+    writer.write(createPut(CHRYSLER, 100));
+    writer.write(createPut(FORD, 18));
+    writer.write(createPut(CHRYSLER, 120));
+    writer.write(createPut(CHRYSLER, 115));
+    writer.write(createPut(FORD, 22));
+    writer.write(createPut(CHRYSLER, 110));
+
+    // writer should process updates for first group of records
+    // after processed updates has been stored, "native" HBase scanner should return processed results too
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+
+    writer.write(createPut(CHRYSLER, 105));
+    writer.write(createPut(FORD, 24));
+    writer.write(createPut(FORD, 28));
+    writer.write(createPut(CHRYSLER, 107));
+    writer.write(createPut(FORD, 32));
+
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {32, 28, 24, 22, 18});
+
+    writer.write(createPut(FORD, 40));
+    writer.write(createPut(CHRYSLER, 113));
+
+    writer.flush();
+
+    // we use compaction since updates were partially compacted by writer
+    // (since its max buffer size is less then total puts #)
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+
+    UpdatesProcessingUtil.processUpdates(hTable, processor);
+    // after processed updates has been stored, "native" HBase scanner should return processed results too
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+
+    hTable.close();
+  }
+
   private static void performUpdatesProcessingButWithoutDeletionOfProcessedRecords(final HTable hTable, UpdateProcessor updateProcessor) throws IOException {
     ResultScanner resultScanner =
             new HutResultScanner(hTable.getScanner(new Scan()), updateProcessor, hTable, true) {
@@ -571,11 +616,15 @@ public class TestHBaseHut {
   }
 
   private static void recordSale(HTable hTable, byte[] company, int price) throws InterruptedException, IOException {
-    Put put = new HutPut(company);
-    put.add(SALE_CF, Bytes.toBytes("lastPrice0"), Bytes.toBytes(price));
+    Put put = createPut(company, price);
     Thread.sleep(1); // sanity interval
     hTable.put(put);
+  }
 
+  private static HutPut createPut(byte[] company, int price) {
+    HutPut put = new HutPut(company);
+    put.add(SALE_CF, Bytes.toBytes("lastPrice0"), Bytes.toBytes(price));
+    return put;
   }
 
   private static void verifyLastSalesWithNativeScanner(HTable hTable, byte[] company, int[] prices) throws IOException {
