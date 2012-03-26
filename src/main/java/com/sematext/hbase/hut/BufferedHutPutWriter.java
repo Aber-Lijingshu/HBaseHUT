@@ -39,6 +39,10 @@ public class BufferedHutPutWriter {
   private HutResultScanner.UpdateProcessingResultImpl processingResult =
           new HutResultScanner.UpdateProcessingResultImpl();
 
+  // some stats
+  private long queuedRecordsCount;
+  private long writtenRecordsCount;
+
   // TODO: do these fields really belong to this class and not to the buffer class?
   private final int maxBufferSize;
   private int bufferedCount;
@@ -52,9 +56,12 @@ public class BufferedHutPutWriter {
     this.buffer = new LinkedHashMap<ByteArrayWrapper, List<HutPut>>(bufferSize / 3, 1.0f, false);
     this.bufferedCount = 0;
     this.maxBufferSize = bufferSize;
+    resetStats();
   }
 
   public void write(HutPut put) {
+    queuedRecordsCount++;
+    
     // think over reusing object instance
     ByteArrayWrapper key = new ByteArrayWrapper(HutRowKeyUtil.getOriginalKey(put.getRow()));
     List<HutPut> puts = buffer.get(key);
@@ -69,7 +76,30 @@ public class BufferedHutPutWriter {
     flushBufferPartIfNeeded();
   }
 
-  public void flushBufferPartIfNeeded() {
+  public void flush() {
+    for (List<HutPut> group : buffer.values()) {
+      processGroupAndWrite(group);
+    }
+
+    buffer.clear();
+
+    bufferedCount = 0;
+  }
+
+  public void resetStats() {
+    queuedRecordsCount = 0;
+    writtenRecordsCount = 0;
+  }
+
+  public long getQueuedRecordsCount() {
+    return queuedRecordsCount;
+  }
+
+  public long getWrittenRecordsCount() {
+    return writtenRecordsCount;
+  }
+
+  private void flushBufferPartIfNeeded() {
     boolean removeFromBuffer = bufferedCount > maxBufferSize;
     // TODO: is it safe to flush here?
     if (removeFromBuffer) {
@@ -81,16 +111,6 @@ public class BufferedHutPutWriter {
       buffer.remove(eldestKey);
       bufferedCount -= eldest.size();
     }
-  }
-
-  public void flush() {
-    for (List<HutPut> group : buffer.values()) {
-      processGroupAndWrite(group);
-    }
-
-    buffer.clear();
-
-    bufferedCount = 0;
   }
 
   private void processGroupAndWrite(List<HutPut> list) {
@@ -108,16 +128,25 @@ public class BufferedHutPutWriter {
       try {
         Put put = HutResultScanner.createPutWithProcessedResult(processingResult.getResult(),
                 first.getRow(), list.get(list.size() - 1).getRow());
-        hTable.put(put);
+        put(put);
       } catch (IOException e) {
         throw new RuntimeException("Error during writing processed Puts into HBase table", e);
       }
     } else {
       try {
-        hTable.put(first);
+        put(first);
       } catch (IOException e) {
         throw new RuntimeException("Error during writing Puts into HBase table", e);
       }
     }
+  }
+
+  private void put(Put put) throws IOException {
+    writtenRecordsCount++;
+    writeInternal(put);
+  }
+
+  protected void writeInternal(Put put) throws IOException {
+    hTable.put(put);
   }
 }
