@@ -31,10 +31,10 @@ public class BufferedHutPutWriter {
   private final HTable hTable;
   private final UpdateProcessor updateProcessor;
   // buffer is similar to LRU cache
-  // TODO: consider setting max timeout for record group being in the buffer to prevent
+  // TODO: consider setting max timeout for record 15group being in the buffer to prevent
   //       some records stuck for too long
   // TODO: consider removing not just lru but old *and* where we can compact more
-  private final LinkedHashMap<ByteArrayWrapper, List<HutPut>> buffer;
+  private final LinkedHashMap<ByteArrayWrapper, List<Put>> buffer;
   // Can be converted to local variable, but we want to reuse processingResult instance
   private HutResultScanner.UpdateProcessingResultImpl processingResult =
           new HutResultScanner.UpdateProcessingResultImpl();
@@ -53,20 +53,20 @@ public class BufferedHutPutWriter {
       // Notes:
       // * initial capacity is just an estimate TODO: allow client code (which uses writer) control it
       // * using insertion order so that records don't stuck for long time in the buffer
-    this.buffer = new LinkedHashMap<ByteArrayWrapper, List<HutPut>>(bufferSize / 3, 1.0f, false);
+    this.buffer = new LinkedHashMap<ByteArrayWrapper, List<Put>>(bufferSize / 3, 1.0f, false);
     this.bufferedCount = 0;
     this.maxBufferSize = bufferSize;
     resetStats();
   }
 
-  public void write(HutPut put) {
+  public void write(Put put) {
     queuedRecordsCount++;
     
     // think over reusing object instance
     ByteArrayWrapper key = new ByteArrayWrapper(HutRowKeyUtil.getOriginalKey(put.getRow()));
-    List<HutPut> puts = buffer.get(key);
+    List<Put> puts = buffer.get(key);
     if (puts == null) {
-      puts = new ArrayList<HutPut>();
+      puts = new ArrayList<Put>();
       buffer.put(key, puts);
     }
 
@@ -77,7 +77,7 @@ public class BufferedHutPutWriter {
   }
 
   public void flush() {
-    for (List<HutPut> group : buffer.values()) {
+    for (List<Put> group : buffer.values()) {
       processGroupAndWrite(group);
     }
 
@@ -104,7 +104,7 @@ public class BufferedHutPutWriter {
     // TODO: is it safe to flush here?
     if (removeFromBuffer) {
       // TODO: is there a way to get & delete oldest record "in-place"?
-      List<HutPut> eldest = buffer.values().iterator().next();
+      List<Put> eldest = buffer.values().iterator().next();
       // eldest and eldestKey in sync since using LinkedHashMap
       ByteArrayWrapper eldestKey = buffer.keySet().iterator().next();
       processGroupAndWrite(eldest);
@@ -113,14 +113,14 @@ public class BufferedHutPutWriter {
     }
   }
 
-  private void processGroupAndWrite(List<HutPut> list) {
-    HutPut first = list.get(0);
+  private void processGroupAndWrite(List<Put> list) {
+    Put first = list.get(0);
     if (list.size() > 1) {
       // TODO: do we need to place this into result by default *always*? May be only
       // when user code didn't place anything? Also see other places
       processingResult.init(first.getRow());
       List<Result> records = new ArrayList<Result>();
-      for (HutPut put : list) {
+      for (Put put : list) {
         records.add(HTableUtil.convert(put));
       }
       updateProcessor.process(records, processingResult);
