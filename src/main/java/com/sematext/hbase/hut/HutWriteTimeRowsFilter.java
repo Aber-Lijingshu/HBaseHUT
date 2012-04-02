@@ -30,6 +30,8 @@ public class HutWriteTimeRowsFilter extends FilterBase {
   private long minTs = Long.MIN_VALUE;
   private long maxTs = Long.MAX_VALUE;
 
+  byte[] nextRowKeyHint = null;
+
   /**
    * Used internally for reflection, do NOT use it directly
    */
@@ -45,11 +47,34 @@ public class HutWriteTimeRowsFilter extends FilterBase {
   public ReturnCode filterKeyValue(KeyValue kv) {
     byte[] rowKey = kv.getRow();
 
-    if (HutRowKeyUtil.writtenBetween(rowKey, minTs, maxTs)) {
-      return ReturnCode.INCLUDE;
-    } else { // TODO: provide hints for fast-forwarding the scanner
-      return ReturnCode.NEXT_ROW;
+    if (!HutRowKeyUtil.writtenAfter(rowKey, minTs)) {
+      // omits hut data at the end of key and makes copy of the array
+      byte[] original = HutRowKeyUtil.getOriginalKey(rowKey);
+      // hint is the same original key but start interval is set to minTs
+      byte[] hint = HutRowKeyUtil.createNewKey(original, minTs);
+      nextRowKeyHint = hint;
+      return ReturnCode.SEEK_NEXT_USING_HINT;
     }
+
+    if (!HutRowKeyUtil.writtenBefore(rowKey, maxTs)) {
+      // omits hut data at the end of key and makes copy of the array
+      byte[] original = HutRowKeyUtil.getOriginalKey(rowKey);
+      // hint is the same original key but start interval is set to max long value to fast-forward to next record
+      // with different original key
+      byte[] hint = HutRowKeyUtil.createNewKey(original, Long.MAX_VALUE);
+      nextRowKeyHint = hint;
+      return ReturnCode.SEEK_NEXT_USING_HINT;
+    }
+
+    return ReturnCode.INCLUDE;
+  }
+
+  @Override
+  public KeyValue getNextKeyHint(KeyValue currentKV) {
+    KeyValue hint =  KeyValue.createFirstOnRow(nextRowKeyHint);
+    nextRowKeyHint = null;
+
+    return hint;
   }
 
   @Override
