@@ -283,28 +283,40 @@ public class TestHBaseHut {
   @Test
   public void testUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
     try {
-      int mapBufferSize;
+      int mapBufferSize = 10;
+      writeFordAndChryslerData();
+      processUpdatesWithMrJob(mapBufferSize, 130);  // in bytes
+      // NOTE: verifying with compaction because  records were only partially
+      // compacted due to small mapBufferSize in bytes
+      verifyLastFordAndChryslerSalesWithCompation(new StockSaleUpdateProcessor());
+      // TODO: verify that at least smth was compacted
+
+      int twoMegabytes = 2 * 1024 * 1024;
       for (mapBufferSize = 1; mapBufferSize < 6; mapBufferSize++) {
+        System.out.println("mapBufferSize: " + mapBufferSize);
+        DebugUtil.clean(hTable);
         writeFordAndChryslerData();
-        processUpdatesWithMrJob(mapBufferSize);
+        processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
         verifyLastFordAndChryslerSalesWithNativeScanner();
       }
 
       mapBufferSize = 10;
+      DebugUtil.clean(hTable);
       writeFordAndChryslerData();
-      processUpdatesWithMrJob(mapBufferSize);
+      processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
       verifyLastFordAndChryslerSalesWithNativeScanner();
 
       mapBufferSize = 20;
+      DebugUtil.clean(hTable);
       writeFordAndChryslerData();
-      processUpdatesWithMrJob(mapBufferSize);
+      processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
       verifyLastFordAndChryslerSalesWithNativeScanner();
 
       // Testing one more time now with record in the end of table which is not compacted
       DebugUtil.clean(hTable);
       writeFordAndChryslerData();
       recordSale(hTable, TOYOTA, 23);
-      processUpdatesWithMrJob(4);
+      processUpdatesWithMrJob(4, twoMegabytes);
       verifyLastFordAndChryslerSalesWithNativeScanner();
       verifyLastSalesWithNativeScanner(hTable, TOYOTA, new int[] {23});
 
@@ -314,11 +326,12 @@ public class TestHBaseHut {
     }
   }
 
-  private void processUpdatesWithMrJob(int mapBufferSize) throws IOException, InterruptedException, ClassNotFoundException {
+  private void processUpdatesWithMrJob(int mapBufferSize, long mapBufferSizeInBytes) throws IOException, InterruptedException, ClassNotFoundException {
     System.out.println(DebugUtil.getContentAsText(hTable));
 
     Configuration configuration = testingUtility.getConfiguration();
     configuration.set("hut.mr.buffer.size", String.valueOf(mapBufferSize));
+    configuration.set("hut.mr.buffer.size.bytes", String.valueOf(mapBufferSizeInBytes));
     Job job = new Job(configuration);
     UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
 
@@ -339,6 +352,11 @@ public class TestHBaseHut {
 
       recordSale(hTable, company, i);
     }
+  }
+
+  private void verifyLastFordAndChryslerSalesWithCompation(UpdateProcessor updateProcessor) throws IOException {
+    verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
+    verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
   }
 
   private void verifyLastFordAndChryslerSalesWithNativeScanner() throws IOException {
