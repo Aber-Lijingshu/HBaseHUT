@@ -2,7 +2,7 @@ HBaseHUT:
 ---------
 http://github.com/sematext/HBaseHUT
 
-November 2010
+November 2010 - now.
 
 Released under Apache License 2.0.
 
@@ -53,5 +53,5 @@ their execution use -Dmaven.skip.tests=true.
 
 HBase Version Compatibility:
 ----------------------------
-Compatible with HBase 0.20.5 - 0.89.XXX.
-May be compatible with previous: tests needed (TODO)
+Compatible with HBase 0.20.5 - 0.92.xxx
+May be compatible with older: tests needed (TODO)
