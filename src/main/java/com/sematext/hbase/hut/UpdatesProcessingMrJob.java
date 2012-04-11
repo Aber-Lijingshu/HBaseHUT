@@ -15,6 +15,9 @@
  */
 package com.sematext.hbase.hut;
 
+import java.io.IOException;
+import java.util.LinkedList;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.KeyValue;
@@ -29,9 +32,6 @@ import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapper;
 import org.apache.hadoop.hbase.mapreduce.TableReducer;
 import org.apache.hadoop.mapreduce.Job;
-
-import java.io.IOException;
-import java.util.LinkedList;
 
 /**
  * Perform processing updates by running MapReduce job, and hence utilizes data locality during work (to some extend).
@@ -215,7 +215,6 @@ public final class UpdatesProcessingMrJob {
 
     private void addToMapInputBuffer(Result value) {
       bytesInBuffer += getSize(value);
-      System.out.println("bytesInBuffer " + bytesInBuffer);
       mapInputBuff.addLast(value);
     }
 
