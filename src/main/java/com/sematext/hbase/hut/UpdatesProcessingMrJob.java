@@ -97,7 +97,7 @@ public final class UpdatesProcessingMrJob {
       }
 
       @Override
-      void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
+      protected void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
         if (updateProcessor == null) {
           throw new IllegalArgumentException("UpdateProcessor should NOT be null.");
         }
@@ -111,7 +111,7 @@ public final class UpdatesProcessingMrJob {
         return super.next();
       }
 
-      Result fetchNext() throws IOException {
+      protected Result fetchNext() throws IOException {
         // trying to fetch data from nextItemsToFetch buffer
         if (mapInputBuff.size() == 0) {
           return null;

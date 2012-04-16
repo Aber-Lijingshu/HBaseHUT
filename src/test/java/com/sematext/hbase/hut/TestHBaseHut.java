@@ -60,7 +60,7 @@ public class TestHBaseHut {
   }
 
   // Stores only last 5 stock prices
-  static class StockSaleUpdateProcessor extends UpdateProcessor {
+  public static class StockSaleUpdateProcessor extends UpdateProcessor {
     @Override
     public void process(Iterable<Result> records, UpdateProcessingResult processingResult) {
       // Processing records

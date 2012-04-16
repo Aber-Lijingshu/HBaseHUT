@@ -15,13 +15,18 @@
  */
 package com.sematext.hbase.hut;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
 import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.io.Writable;
 
 /**
  * Performs records processing.
  * Implementation SHOULD be stateless and thread-safe
  */
-public abstract class UpdateProcessor {
+public abstract class UpdateProcessor implements Writable {
   public abstract void process(Iterable<Result> records, UpdateProcessingResult processingResult);
 
   /**
@@ -33,5 +38,15 @@ public abstract class UpdateProcessor {
    */
   public boolean isMergeNeeded(byte[] originalKey) {
     return true;
+  }
+
+  @Override
+  public void write(DataOutput dataOutput) throws IOException {
+    // DO NOTHING BY DEFAULT
+  }
+
+  @Override
+  public void readFields(DataInput dataInput) throws IOException {
+    // DO NOTHING BY DEFAULT
   }
 }

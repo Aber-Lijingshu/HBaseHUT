@@ -31,6 +31,8 @@ import java.util.Iterator;
  * HBaseHUT {@link org.apache.hadoop.hbase.client.ResultScanner} implementation.
  * Use it when scanning records written as {@link com.sematext.hbase.hut.HutPut}s
  */
+// TODO: refactor to accept arbitrary {@link Result}s provider (currently
+//       inheritance used to override default source)
 public class HutResultScanner implements ResultScanner {
   private final ResultScanner resultScanner;
   private Result nonConsumed = null;
@@ -54,7 +56,7 @@ public class HutResultScanner implements ResultScanner {
     this.hTable = hTable;
   }
 
-  void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
+  protected void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
     if (resultScanner == null) {
       throw new IllegalArgumentException("ResultScanner should NOT be null.");
     }
@@ -118,7 +120,7 @@ public class HutResultScanner implements ResultScanner {
     return HutRowKeyUtil.sameOriginalKeys(firstKey, secondKey);
   }
 
-  Result fetchNext() throws IOException {
+  protected Result fetchNext() throws IOException {
     return resultScanner.next();
   }
 
@@ -187,7 +189,9 @@ public class HutResultScanner implements ResultScanner {
 
   @Override
   public void close() {
-    resultScanner.close();
+    if (resultScanner != null) {
+      resultScanner.close();
+    }
   }
 
   private static class UpdateProcessingResultImpl implements UpdateProcessingResult {

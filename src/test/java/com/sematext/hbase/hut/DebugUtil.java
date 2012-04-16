@@ -63,6 +63,13 @@ public final class DebugUtil {
     }
   }
 
+  public static String getAsText(Result next) {
+    StringBuilder text = new StringBuilder();
+    append(text, next);
+
+    return text.toString();
+  }
+
   private static String getHutRowKeyAsText(byte[] row) {
     return Bytes.toString(HutRowKeyUtil.getOriginalKey(row)) + "-" +
             Bytes.toLong(Bytes.head(Bytes.tail(row, 2 * Bytes.SIZEOF_LONG), Bytes.SIZEOF_LONG)) + "-" +
