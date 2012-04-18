@@ -15,8 +15,12 @@
  */
 package com.sematext.hbase.hut;
 
+import java.io.IOException;
+import java.util.LinkedList;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
@@ -28,9 +32,6 @@ import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapper;
 import org.apache.hadoop.hbase.mapreduce.TableReducer;
 import org.apache.hadoop.mapreduce.Job;
-
-import java.io.IOException;
-import java.util.LinkedList;
 
 /**
  * Perform processing updates by running MapReduce job, and hence utilizes data locality during work (to some extend).
@@ -46,18 +47,25 @@ public final class UpdatesProcessingMrJob {
 
   public static class UpdatesProcessingMapper extends TableMapper<ImmutableBytesWritable, Put> {
     public static final String HUT_MR_BUFFER_SIZE_ATTR = "hut.mr.buffer.size";
+    public static final String HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR = "hut.mr.buffer.size.bytes";
     public static final String HUT_PROCESSOR_CLASS_ATTR = "hut.processor.class";
     public static final String HUT_PROCESSOR_TSMOD_ATTR = "hut.processor.tsMod";
     private static final Log LOG = LogFactory.getLog(UpdatesProcessingMapper.class);
 
     // buffer for items read by map()
-    private int bufferMaxSize = 1000; // can be overridden by HUT_MR_BUFFER_SIZE_ATTR attribute in configuration
+    // can be overridden by HUT_MR_BUFFER_SIZE_ATTR attribute in configuration
+    private int bufferMaxSize = 1000;
+
+    // buffer for items read by map()
+    // can be overridden by HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR attribute in configuration
+    private int bufferMaxSizeInBytes = 32 * 1024 * 1024; // 32 MB
 
     // TODO: describe
     private long tsMod = 0; // can be overridden by HUT_PROCESSOR_TSMOD_ATTR attribute in configuration
 
     // queue with map input records to be fed into updates processor
     private LinkedList<Result> mapInputBuff;
+    private long bytesInBuffer;
     // used to process updates TODO: think over reimplementing processing updates for MR case to not stick to scan case
     private DetachedHutResultScanner resultScanner;
     // used to keep last processed update when buffer was emptied (before filled again) - see more comments in the code
@@ -112,12 +120,7 @@ public final class UpdatesProcessingMrJob {
       }
 
       protected Result fetchNext() throws IOException {
-        // trying to fetch data from nextItemsToFetch buffer
-        if (mapInputBuff.size() == 0) {
-          return null;
-        }
-
-        return mapInputBuff.poll();
+        return fetchNextFromBuffer();
       }
 
       public Put getProcessedUpdatesToStore() {
@@ -135,8 +138,8 @@ public final class UpdatesProcessingMrJob {
      * @throws InterruptedException When the job is aborted.
      */
     public void map(ImmutableBytesWritable key, Result value, Context context) throws IOException, InterruptedException {
-      mapInputBuff.addLast(value);
-      if (mapInputBuff.size() < bufferMaxSize) {
+      addToMapInputBuffer(value);
+      if (!isMapInputBufferFull()) {
         return;
       }
 
@@ -167,10 +170,10 @@ public final class UpdatesProcessingMrJob {
           readyToStoreButWaitingFurtherMerging = null;
 
           res = resultScanner.next();
-          boolean lastInBuffer = res != null;
-          // we don't want to store last processed result *now*,
-          // instead we postpone storing it to give it a chance to merge with next map input records down the road
-          if (lastInBuffer) {
+          boolean lastInBuffer = res == null;
+          // We don't want to store last processed result *now*,
+          // instead we postpone storing it to give it a chance to merge with next map input records down the road.
+          if (!lastInBuffer) {
             if (processingResultToStore != null) {
               emit(context, processingResultToStore);
             }
@@ -179,7 +182,13 @@ public final class UpdatesProcessingMrJob {
 
         if (prev != null) {
           // see explanation near assignment
-          mapInputBuff.addLast(prev);
+          boolean added = addToMapInputBufferIfSpaceAvailable(prev);
+
+          if (!added && processingResultToStore != null) {
+            emit(context, processingResultToStore);
+            return;
+          }
+
           readyToStoreButWaitingFurtherMerging = processingResultToStore;
         }
       } catch (IOException e) {
@@ -192,6 +201,44 @@ public final class UpdatesProcessingMrJob {
         failed = true; // marking job as failed
       }
 
+    }
+
+    private Result fetchNextFromBuffer() {
+      if (mapInputBuff.size() == 0) {
+        return null;
+      }
+
+      Result r = mapInputBuff.poll();
+      bytesInBuffer -= getSize(r);
+      return r;
+    }
+
+    private void addToMapInputBuffer(Result value) {
+      bytesInBuffer += getSize(value);
+      mapInputBuff.addLast(value);
+    }
+
+    private boolean addToMapInputBufferIfSpaceAvailable(Result value) {
+      if (bytesInBuffer + getSize(value) <= bufferMaxSizeInBytes) {
+        addToMapInputBuffer(value);
+        return true;
+      }
+
+      return false;
+    }
+
+    private static int getSize(Result value) {
+      // TODO: is this the best way of calculating size? Tried using getBytes() but it sometimes returns null
+      int size = 0;
+      for (KeyValue kv : value.raw()) {
+        size += kv.getLength();
+      }
+
+      return size;
+    }
+
+    private boolean isMapInputBufferFull() {
+      return mapInputBuff.size() >= bufferMaxSize || bytesInBuffer >= bufferMaxSizeInBytes;
     }
 
     private void emit(Context context, Put processingResultToStore) throws IOException, InterruptedException {
@@ -235,6 +282,14 @@ public final class UpdatesProcessingMrJob {
         LOG.info("Using bufferMaxSize: " + bufferMaxSize);
       }
 
+      String bufferMaxSizeInBytesValue =  context.getConfiguration().get(HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR);
+      if (bufferMaxSizeInBytesValue == null) {
+        LOG.info(HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR + " is missed in the configuration, using default value: " + bufferMaxSizeInBytes);
+      } else {
+        bufferMaxSizeInBytes = Integer.valueOf(bufferMaxSizeInBytesValue);
+        LOG.info("Using bufferMaxSizeInBytes: " + bufferMaxSizeInBytes);
+      }
+
       String tsModValue =  context.getConfiguration().get(HUT_PROCESSOR_TSMOD_ATTR);
       if (tsModValue == null) {
         LOG.info(HUT_PROCESSOR_TSMOD_ATTR + " is missed in the configuration, using default value: " + tsMod);
@@ -244,6 +299,7 @@ public final class UpdatesProcessingMrJob {
       }
 
       mapInputBuff = new LinkedList<Result>();
+      bytesInBuffer = 0;
       resultScanner = new DetachedHutResultScanner(updateProcessor);
       failed = false;
     }
@@ -268,6 +324,9 @@ public final class UpdatesProcessingMrJob {
         }
 
       }
+
+      mapInputBuff.clear();
+      bytesInBuffer = 0;
 
       if (failed) {
         throw new RuntimeException("Job was marked as failed");

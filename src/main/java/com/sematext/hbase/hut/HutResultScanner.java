@@ -95,7 +95,7 @@ public class HutResultScanner implements ResultScanner {
     // TODO: modify API of processor to return true/false instead of extra method?
     // TODO: adjust API of updateProcessor.isMergeNeeded method (add offset/length params) to avoid creating extra objects
     if (updateProcessor.isMergeNeeded(HutRowKeyUtil.getOriginalKey(firstResult.getRow()))) {
-      processingResult.init(firstResult.getRow(), firstResult.raw());
+      processingResult.init(firstResult.getRow());
       updateProcessor.process(iterableRecords, processingResult);
 
       result = processingResult.getResult();
@@ -194,13 +194,13 @@ public class HutResultScanner implements ResultScanner {
     }
   }
 
-  private static class UpdateProcessingResultImpl implements UpdateProcessingResult {
-    private KeyValue[] kvs;
+  static class UpdateProcessingResultImpl implements UpdateProcessingResult {
+    private KeyValue[] kvs; // TODO: consider using a List
     private byte[] row;
 
-    public void init(byte[] row, KeyValue[] kvs) {
-      this.kvs = kvs;
+    public void init(byte[] row) {
       this.row = row;
+      this.kvs = new KeyValue[0];
     }
 
     @Override
@@ -427,18 +427,23 @@ public class HutResultScanner implements ResultScanner {
     // hence we can utilize its write time as start time for the compressed interval
     byte[] firstRow = processingResult.getRow();
     byte[] lastRow = last.getRow();
+    Put put = createPutWithProcessedResult(processingResult, firstRow, lastRow);
 
+
+    store(put);
+    deleteProcessedRecords(processingResult.getRow(), lastRow, put.getRow());
+  }
+
+  // TODO: move this method out of this class? (looks like utility method)
+  static Put createPutWithProcessedResult(Result processingResult, byte[] firstRow, byte[] lastRow) throws IOException {
     // adjusting row, so that it "covers" interval from first record to last record
     byte[] row = Arrays.copyOf(firstRow, firstRow.length);
     HutRowKeyUtil.setIntervalEnd(row, lastRow); // can row here remain the same?
 
-    Put put = createPutWithProcessedResult(processingResult, row);
-
-    store(put);
-    deleteProcessedRecords(processingResult.getRow(), lastRow, row);
+    return createPutWithProcessedResult(processingResult, row);
   }
 
-  private Put createPutWithProcessedResult(Result processingResult, byte[] row) throws IOException {
+  private static Put createPutWithProcessedResult(Result processingResult, byte[] row) throws IOException {
     Put put = new Put(row);
     for (KeyValue kv : processingResult.raw()) {
       // using copying here, otherwise processingResult is affected when its

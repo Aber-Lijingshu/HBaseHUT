@@ -279,37 +279,56 @@ public class TestHBaseHut {
   // TODO: add more test-cases for MR job
   @Test
   public void testUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
-    int mapBufferSize;
-    for (mapBufferSize = 1; mapBufferSize < 6; mapBufferSize++) {
+    try {
+      int mapBufferSize = 10;
       writeFordAndChryslerData();
-      processUpdatesWithMrJob(mapBufferSize);
+      processUpdatesWithMrJob(mapBufferSize, 130);  // in bytes
+      // NOTE: verifying with compaction because  records were only partially
+      // compacted due to small mapBufferSize in bytes
+      verifyLastFordAndChryslerSalesWithCompation(new StockSaleUpdateProcessor());
+      // TODO: verify that at least smth was compacted
+
+      int twoMegabytes = 2 * 1024 * 1024;
+      for (mapBufferSize = 1; mapBufferSize < 6; mapBufferSize++) {
+        System.out.println("mapBufferSize: " + mapBufferSize);
+        DebugUtil.clean(hTable);
+        writeFordAndChryslerData();
+        processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
+        verifyLastFordAndChryslerSalesWithNativeScanner();
+      }
+
+      mapBufferSize = 10;
+      DebugUtil.clean(hTable);
+      writeFordAndChryslerData();
+      processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
       verifyLastFordAndChryslerSalesWithNativeScanner();
+
+      mapBufferSize = 20;
+      DebugUtil.clean(hTable);
+      writeFordAndChryslerData();
+      processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
+      verifyLastFordAndChryslerSalesWithNativeScanner();
+
+      // Testing one more time now with record in the end of table which is not compacted
+      DebugUtil.clean(hTable);
+      writeFordAndChryslerData();
+      recordSale(hTable, TOYOTA, 23);
+      processUpdatesWithMrJob(4, twoMegabytes);
+      verifyLastFordAndChryslerSalesWithNativeScanner();
+      verifyLastSalesWithNativeScanner(hTable, TOYOTA, new int[] {23});
+
+
+    } finally { // TODO: do we really need try/finally block here?
+      testingUtility.shutdownMiniMapReduceCluster();
     }
-
-    mapBufferSize = 10;
-    writeFordAndChryslerData();
-    processUpdatesWithMrJob(mapBufferSize);
-    verifyLastFordAndChryslerSalesWithNativeScanner();
-
-    mapBufferSize = 20;
-    writeFordAndChryslerData();
-    processUpdatesWithMrJob(mapBufferSize);
-    verifyLastFordAndChryslerSalesWithNativeScanner();
-
-    // Testing one more time now with record in the end of table which is not compacted
-    DebugUtil.clean(hTable);
-    writeFordAndChryslerData();
-    recordSale(hTable, TOYOTA, 23);
-    processUpdatesWithMrJob(4);
-    verifyLastFordAndChryslerSalesWithNativeScanner();
-    verifyLastSalesWithNativeScanner(hTable, TOYOTA, new int[] {23});
   }
 
-  private void processUpdatesWithMrJob(int mapBufferSize) throws IOException, InterruptedException, ClassNotFoundException {
+  private void processUpdatesWithMrJob(int mapBufferSize, long mapBufferSizeInBytes) throws IOException, InterruptedException, ClassNotFoundException {
     System.out.println(DebugUtil.getContentAsText(hTable));
 
     Configuration configuration = testingUtility.getConfiguration();
     configuration.set("hut.mr.buffer.size", String.valueOf(mapBufferSize));
+    configuration.set("hut.mr.buffer.size.bytes", String.valueOf(mapBufferSizeInBytes));
     Job job = new Job(configuration);
     UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
 
@@ -332,6 +351,11 @@ public class TestHBaseHut {
     }
   }
 
+  private void verifyLastFordAndChryslerSalesWithCompation(UpdateProcessor updateProcessor) throws IOException {
+    verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
+    verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
+  }
+
   private void verifyLastFordAndChryslerSalesWithNativeScanner() throws IOException {
     verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {14, 12, 10, 8, 6});
     verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {13, 11, 9, 7, 5});
@@ -340,40 +364,45 @@ public class TestHBaseHut {
   // TODO: add more test-cases for MR job
   @Test
   public void testPartialUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
-    // Writing data
-    for (int i = 0; i < 15; i++) {
-      byte[] company;
-      if (i % 2 == 0) {
-        company = FORD;
-      } else {
-        company = CHRYSLER;
+    try {
+      // Writing data
+      for (int i = 0; i < 15; i++) {
+        byte[] company;
+        if (i % 2 == 0) {
+          company = FORD;
+        } else {
+          company = CHRYSLER;
+        }
+
+        recordSale(hTable, company, i);
+
+        Thread.sleep(200);
       }
 
-      recordSale(hTable, company, i);
+      recordSale(hTable, TOYOTA, 23);
 
-      Thread.sleep(200);
+      System.out.println(DebugUtil.getContentAsText(hTable));
+
+      Configuration configuration = testingUtility.getConfiguration();
+      configuration.set("hut.mr.buffer.size", String.valueOf(10));
+      configuration.set("hut.processor.tsMod", String.valueOf(300));
+      Job job = new Job(configuration);
+      UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
+
+      boolean success = job.waitForCompletion(true);
+      Assert.assertTrue(success);
+
+      // TODO: add code verification of proper partial compaction instead of manually observing in output
+      System.out.println(DebugUtil.getContentAsText(hTable));
+
+      StockSaleUpdateProcessor updateProcessor = new StockSaleUpdateProcessor();
+      verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
+      verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
+      verifyLastSalesWithCompation(hTable, updateProcessor, TOYOTA, new int[]{23});
+
+    } finally { // TODO: do we really need try/finally block here?
+      testingUtility.shutdownMiniMapReduceCluster();
     }
-
-    recordSale(hTable, TOYOTA, 23);
-
-    System.out.println(DebugUtil.getContentAsText(hTable));
-
-    Configuration configuration = testingUtility.getConfiguration();
-    configuration.set("hut.mr.buffer.size", String.valueOf(10));
-    configuration.set("hut.processor.tsMod", String.valueOf(300));
-    Job job = new Job(configuration);
-    UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
-
-    boolean success = job.waitForCompletion(true);
-    Assert.assertTrue(success);
-
-    // TODO: add code verification of proper partial compaction instead of manually observing in output
-    System.out.println(DebugUtil.getContentAsText(hTable));
-
-    StockSaleUpdateProcessor updateProcessor = new StockSaleUpdateProcessor();
-    verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
-    verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
-    verifyLastSalesWithCompation(hTable, updateProcessor, TOYOTA, new int[]{23});
   }
 
   @Test
@@ -544,6 +573,51 @@ public class TestHBaseHut {
     hTable.close();
   }
 
+  // TODO: this is the simplest test for BufferedHutPutWriter, add more
+  @Test
+  public void testBufferedHutPutWriter() throws IOException, InterruptedException {
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+    BufferedHutPutWriter writer = new BufferedHutPutWriter(hTable, processor, 6);
+
+    // Writing data
+    writer.write(createPut(CHRYSLER, 90));
+    writer.write(createPut(CHRYSLER, 100));
+    writer.write(createPut(FORD, 18));
+    writer.write(createPut(CHRYSLER, 120));
+    writer.write(createPut(CHRYSLER, 115));
+    writer.write(createPut(FORD, 22));
+    writer.write(createPut(CHRYSLER, 110));
+
+    // writer should process updates for first group of records
+    // after processed updates has been stored, "native" HBase scanner should return processed results too
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+
+    writer.write(createPut(CHRYSLER, 105));
+    writer.write(createPut(FORD, 24));
+    writer.write(createPut(FORD, 28));
+    writer.write(createPut(CHRYSLER, 107));
+    writer.write(createPut(FORD, 32));
+
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {32, 28, 24, 22, 18});
+
+    writer.write(createPut(FORD, 40));
+    writer.write(createPut(CHRYSLER, 113));
+
+    writer.flush();
+
+    // we use compaction since updates were partially compacted by writer
+    // (since its max buffer size is less then total puts #)
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+
+    UpdatesProcessingUtil.processUpdates(hTable, processor);
+    // after processed updates has been stored, "native" HBase scanner should return processed results too
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+
+    hTable.close();
+  }
+
   private static void performUpdatesProcessingButWithoutDeletionOfProcessedRecords(final HTable hTable, UpdateProcessor updateProcessor) throws IOException {
     ResultScanner resultScanner =
             new HutResultScanner(hTable.getScanner(new Scan()), updateProcessor, hTable, true) {
@@ -557,11 +631,15 @@ public class TestHBaseHut {
   }
 
   private static void recordSale(HTable hTable, byte[] company, int price) throws InterruptedException, IOException {
-    Put put = new HutPut(company);
-    put.add(SALE_CF, Bytes.toBytes("lastPrice0"), Bytes.toBytes(price));
+    Put put = createPut(company, price);
     Thread.sleep(1); // sanity interval
     hTable.put(put);
+  }
 
+  private static HutPut createPut(byte[] company, int price) {
+    HutPut put = new HutPut(company);
+    put.add(SALE_CF, Bytes.toBytes("lastPrice0"), Bytes.toBytes(price));
+    return put;
   }
 
   private static void verifyLastSalesWithNativeScanner(HTable hTable, byte[] company, int[] prices) throws IOException {

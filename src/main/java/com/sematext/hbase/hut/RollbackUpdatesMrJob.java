@@ -113,9 +113,12 @@ public final class RollbackUpdatesMrJob {
     job.getConfiguration().set(RollbackUpdatesMapper.HUT_ROLLBACK_UPDATE_MIN_TIME_ATTR, String.valueOf(startTime));
     job.getConfiguration().set(RollbackUpdatesMapper.HUT_ROLLBACK_UPDATE_MAX_TIME_ATTR, String.valueOf(endTime));
 
+    s.setFilter(new HutWriteTimeRowsFilter(endTime, startTime));
+
     s.setCacheBlocks(false);
     // TODO: allow user change using job params
     s.setCaching(512);
+    s.setCacheBlocks(false);
 
     LOG.info("Using scan: " + s.toString());
 

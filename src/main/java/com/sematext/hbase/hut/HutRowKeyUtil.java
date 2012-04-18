@@ -84,8 +84,8 @@ public final class HutRowKeyUtil {
                                 hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG) > 0;
   }
 
-  static byte[] createNewKey(byte[] rowKeyWithIntervalStart, long creationTime) {
-    return Bytes.add(rowKeyWithIntervalStart, Bytes.toBytes(creationTime), NOT_SET_MARK);
+  static byte[] createNewKey(byte[] original, long creationTime) {
+    return Bytes.add(original, Bytes.toBytes(creationTime), NOT_SET_MARK);
   }
 
   static byte[] getStartRowOfInterval(byte[] hutRowKey) {
@@ -124,6 +124,12 @@ public final class HutRowKeyUtil {
   static boolean writtenAfter(byte[] hutRowKey, long startTsInclusive) {
     long startInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
     return startTsInclusive <= startInterval;
+  }
+
+  static boolean writtenBefore(byte[] hutRowKey, long stopTsInclusive) {
+    long rowStartInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long rowStopInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
+    return (NOT_SET_MARK_VAL == rowStopInterval ? stopTsInclusive >= rowStartInterval : stopTsInclusive >= rowStopInterval);
   }
 
   static boolean writtenBetween(byte[] hutRowKey, long startTsInclusive, long stopTsInclusive) {
