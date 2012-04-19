@@ -15,11 +15,11 @@
  */
 package com.sematext.hbase.hut;
 
+import java.util.Arrays;
+
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.Assert;
 import org.junit.Test;
-
-import java.util.Arrays;
 
 /**
  */

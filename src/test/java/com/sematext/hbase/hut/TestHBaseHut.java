@@ -34,19 +34,36 @@ import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * General unit-test for the whole concept 
+ * General unit-test for the whole concept
+ * TODO: split into multiple classes
  */
 public class TestHBaseHut {
-  private HBaseTestingUtility testingUtility;
   public static final byte[] SALE_CF = Bytes.toBytes("sale");
+  private static final String TABLE_NAME = "stock-market";
+  private static final byte[] CHRYSLER = Bytes.toBytes("chrysler");
+  private static final byte[] FORD = Bytes.toBytes("ford");
+  private static final byte[] TOYOTA = Bytes.toBytes("toyota");
+  private HBaseTestingUtility testingUtility;
+  private HTable hTable;
 
   @Before
   public void before() throws Exception {
     testingUtility = new HBaseTestingUtility();
-    testingUtility.startMiniCluster();
+    testingUtility.startMiniZKCluster();
+    testingUtility.startMiniCluster(1);
+    hTable = testingUtility.createTable(Bytes.toBytes(TABLE_NAME), SALE_CF);
   }
 
-  static class StockSaleUpdateProcessor implements UpdateProcessor {
+  @After
+  public void after() throws IOException {
+    hTable = null;
+    testingUtility.shutdownMiniCluster();
+    testingUtility.shutdownMiniZKCluster();
+    testingUtility = null;
+  }
+
+  // Stores only last 5 stock prices
+  static class StockSaleUpdateProcessor extends UpdateProcessor {
     @Override
     public void process(Iterable<Result> records, UpdateProcessingResult processingResult) {
       // Processing records
@@ -66,7 +83,8 @@ public class TestHBaseHut {
       }
       for (int i = 0; i < 5; i++) {
         // iterating backwards so that "lastPrice0" is set to the most recent one
-        byte[] price = lastPricesBuff[(lastIndex + 5 - i) % 5];
+        int index = (lastIndex + 5 - i) % 5;
+        byte[] price = lastPricesBuff[index];
         if (price != null) {
           processingResult.add(SALE_CF, Bytes.toBytes("lastPrice" + i), price);
         }
@@ -92,79 +110,70 @@ public class TestHBaseHut {
 
   @Test
   public void testSimpleScan() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
-    byte[] chrysler = Bytes.toBytes("chrysler");
-    byte[] ford = Bytes.toBytes("ford");
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {});
+    verifyLastSales(hTable, processor, FORD, new int[] {});
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {18});
 
-    verifyLastSales(hTable, processor, chrysler, new int[] {});
-    verifyLastSales(hTable, processor, ford, new int[] {});
-    recordSale(hTable, chrysler, 90);
-    recordSale(hTable, chrysler, 100);
-    recordSale(hTable, ford, 18);
-    recordSale(hTable, chrysler, 120);
-    verifyLastSales(hTable, processor, chrysler, new int[] {120, 100, 90});
-    verifyLastSales(hTable, processor, ford, new int[] {18});
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {22, 18});
 
-    recordSale(hTable, chrysler, 115);
-    recordSale(hTable, ford, 22);
-    recordSale(hTable, chrysler, 110);
-    verifyLastSales(hTable, processor, chrysler, new int[] {110, 115, 120, 100, 90});
-    verifyLastSales(hTable, processor, ford, new int[] {22, 18});
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[] {28, 24, 22, 18});
 
-    recordSale(hTable, chrysler, 105);
-    recordSale(hTable, ford, 24);
-    recordSale(hTable, ford, 28);
-    verifyLastSales(hTable, processor, chrysler, new int[] {105, 110, 115, 120, 100});
-    verifyLastSales(hTable, processor, ford, new int[] {28, 24, 22, 18});
-
-    recordSale(hTable, chrysler, 107);
-    recordSale(hTable, ford, 32);
-    recordSale(hTable, ford, 40);
-    recordSale(hTable, chrysler, 113);
-    verifyLastSales(hTable, processor, chrysler, new int[] {113, 107, 105, 110, 115});
-    verifyLastSales(hTable, processor, ford, new int[] {40, 32, 28, 24, 22});
+    recordSale(hTable, CHRYSLER, 107);
+    recordSale(hTable, FORD, 32);
+    recordSale(hTable, FORD, 40);
+    recordSale(hTable, CHRYSLER, 113);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSales(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
 
     hTable.close();
   }
 
   @Test
   public void testSimpleScanWithCaching() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
-    byte[] chrysler = Bytes.toBytes("chrysler");
-    byte[] ford = Bytes.toBytes("ford");
-    byte[] toyota = Bytes.toBytes("toyota");
-
     verifyLastSalesForAllCompanies(hTable, processor, new int[][] {{}, {}});
-    recordSale(hTable, chrysler, 90);
-    recordSale(hTable, chrysler, 100);
-    recordSale(hTable, ford, 18);
-    recordSale(hTable, chrysler, 120);
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
     verifyLastSalesForAllCompanies(hTable, processor, new int[][] {{120, 100, 90}, {18}, {}});
 
-    recordSale(hTable, toyota, 202);
-    recordSale(hTable, chrysler, 115);
-    recordSale(hTable, toyota, 212);
-    recordSale(hTable, toyota, 204);
-    recordSale(hTable, ford, 22);
-    recordSale(hTable, chrysler, 110);
+    recordSale(hTable, TOYOTA, 202);
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, TOYOTA, 212);
+    recordSale(hTable, TOYOTA, 204);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
     verifyLastSalesForAllCompanies(hTable, processor, new int[][] {{110, 115, 120, 100, 90}, {22, 18}, {204, 212, 202}});
 
-    recordSale(hTable, chrysler, 105);
-    recordSale(hTable, ford, 24);
-    recordSale(hTable, ford, 28);
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
     verifyLastSalesForAllCompanies(hTable, processor, new int[][] {{105, 110, 115, 120, 100}, {28, 24, 22, 18}, {204, 212, 202}});
 
-    recordSale(hTable, chrysler, 107);
-    recordSale(hTable, ford, 32);
-    recordSale(hTable, ford, 40);
-    recordSale(hTable, toyota, 224);
-    recordSale(hTable, chrysler, 113);
+    recordSale(hTable, CHRYSLER, 107);
+    recordSale(hTable, FORD, 32);
+    recordSale(hTable, FORD, 40);
+    recordSale(hTable, TOYOTA, 224);
+    recordSale(hTable, CHRYSLER, 113);
     verifyLastSalesForAllCompanies(hTable, processor, new int[][] {{113, 107, 105, 110, 115}, {40, 32, 28, 24, 22}, {224, 204, 212, 202}});
 
     hTable.close();
@@ -172,79 +181,71 @@ public class TestHBaseHut {
 
   @Test
   public void testStoringProcessedUpdatesDuringScan() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
-    byte[] chrysler = Bytes.toBytes("chrysler");
-    byte[] ford = Bytes.toBytes("ford");
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
 
-    recordSale(hTable, chrysler, 90);
-    recordSale(hTable, chrysler, 100);
-    recordSale(hTable, ford, 18);
-    recordSale(hTable, chrysler, 120);
-    recordSale(hTable, chrysler, 115);
-    recordSale(hTable, ford, 22);
-    recordSale(hTable, chrysler, 110);
-
-    verifyLastSalesWithCompation(hTable, processor, chrysler, new int[] {110, 115, 120, 100, 90});
-    verifyLastSalesWithCompation(hTable, processor, ford, new int[] {22, 18});
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {22, 18});
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable,  chrysler, new int[] {110, 115, 120, 100, 90});
-    verifyLastSalesWithNativeScanner(hTable, ford, new int[] {22, 18});
+    verifyLastSalesWithNativeScanner(hTable,  CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {22, 18});
 
-    recordSale(hTable, chrysler, 105);
-    recordSale(hTable, ford, 24);
-    recordSale(hTable, ford, 28);
-    recordSale(hTable, chrysler, 107);
-    recordSale(hTable, ford, 32);
-    recordSale(hTable, ford, 40);
-    recordSale(hTable, chrysler, 113);
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
+    recordSale(hTable, CHRYSLER, 107);
+    recordSale(hTable, FORD, 32);
+    recordSale(hTable, FORD, 40);
+    recordSale(hTable, CHRYSLER, 113);
 
-    verifyLastSalesWithCompation(hTable, processor, chrysler, new int[] {113, 107, 105, 110, 115});
-    verifyLastSalesWithCompation(hTable, processor, ford, new int[] {40, 32, 28, 24, 22});
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable, chrysler, new int[] {113, 107, 105, 110, 115});
-    verifyLastSalesWithNativeScanner(hTable, ford, new int[] {40, 32, 28, 24, 22});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {40, 32, 28, 24, 22});
 
     hTable.close();
   }
 
   @Test
   public void testUpdatesProcessingUtil() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
-    byte[] chrysler = Bytes.toBytes("chrysler");
-    byte[] ford = Bytes.toBytes("ford");
-
-    recordSale(hTable, chrysler, 90);
-    recordSale(hTable, chrysler, 100);
-    recordSale(hTable, ford, 18);
-    recordSale(hTable, chrysler, 120);
-    recordSale(hTable, chrysler, 115);
-    recordSale(hTable, ford, 22);
-    recordSale(hTable, chrysler, 110);
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
 
     UpdatesProcessingUtil.processUpdates(hTable, processor);
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable, chrysler, new int[] {110, 115, 120, 100, 90});
-    verifyLastSalesWithNativeScanner(hTable, ford, new int[] {22, 18});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {22, 18});
 
-    recordSale(hTable, chrysler, 105);
-    recordSale(hTable, ford, 24);
-    recordSale(hTable, ford, 28);
-    recordSale(hTable, chrysler, 107);
-    recordSale(hTable, ford, 32);
-    recordSale(hTable, ford, 40);
-    recordSale(hTable, chrysler, 113);
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
+    recordSale(hTable, CHRYSLER, 107);
+    recordSale(hTable, FORD, 32);
+    recordSale(hTable, FORD, 40);
+    recordSale(hTable, CHRYSLER, 113);
 
     UpdatesProcessingUtil.processUpdates(hTable, processor);
     UpdatesProcessingUtil.processUpdates(hTable, processor); // updates processing can be performed when no new data was added
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable, chrysler, new int[] {113, 107, 105, 110, 115});
-    verifyLastSalesWithNativeScanner(hTable, ford, new int[] {40, 32, 28, 24, 22});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {40, 32, 28, 24, 22});
 
     hTable.close();
   }
@@ -253,31 +254,27 @@ public class TestHBaseHut {
   // thus updates processing can be performed on per-region basis without breaking things
   @Test
   public void testProcessingUpdatesInSeparateIntervals() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
-    byte[] chrysler = Bytes.toBytes("chrysler");
-    byte[] ford = Bytes.toBytes("ford");
-
-    recordSale(hTable, chrysler, 90);
-    recordSale(hTable, chrysler, 100);
-    recordSale(hTable, ford, 18);
-    recordSale(hTable, chrysler, 120);
-    recordSale(hTable, chrysler, 115);
-    recordSale(hTable, ford, 22);
-    recordSale(hTable, chrysler, 110);
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
 
     performUpdatesProcessingButWithoutDeletionOfProcessedRecords(hTable, processor);
-    verifyLastSales(hTable, processor, chrysler, new int[] {110, 115, 120, 100, 90});
-    verifyLastSales(hTable, processor, ford, new int[] {22, 18});
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {22, 18});
 
-    recordSale(hTable, chrysler, 105);
-    recordSale(hTable, ford, 24);
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
 
     performUpdatesProcessingButWithoutDeletionOfProcessedRecords(hTable, processor);
-    verifyLastSales(hTable, processor, chrysler, new int[] {105, 110, 115, 120, 100});
-    verifyLastSales(hTable, processor, ford, new int[] {24, 22, 18});
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[] {24, 22, 18});
 
     hTable.close();
   }
@@ -285,44 +282,126 @@ public class TestHBaseHut {
   // TODO: add more test-cases for MR job
   @Test
   public void testUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
-    String tableName = "stock-market";
-    HTable hTable = testingUtility.createTable(Bytes.toBytes(tableName), SALE_CF);
-    testingUtility.startMiniMapReduceCluster();
+    try {
+      int mapBufferSize = 10;
+      writeFordAndChryslerData();
+      processUpdatesWithMrJob(mapBufferSize, 130);  // in bytes
+      // NOTE: verifying with compaction because  records were only partially
+      // compacted due to small mapBufferSize in bytes
+      verifyLastFordAndChryslerSalesWithCompation(new StockSaleUpdateProcessor());
+      // TODO: verify that at least smth was compacted
+
+      int twoMegabytes = 2 * 1024 * 1024;
+      for (mapBufferSize = 1; mapBufferSize < 6; mapBufferSize++) {
+        System.out.println("mapBufferSize: " + mapBufferSize);
+        DebugUtil.clean(hTable);
+        writeFordAndChryslerData();
+        processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
+        verifyLastFordAndChryslerSalesWithNativeScanner();
+      }
+
+      mapBufferSize = 10;
+      DebugUtil.clean(hTable);
+      writeFordAndChryslerData();
+      processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
+      verifyLastFordAndChryslerSalesWithNativeScanner();
+
+      mapBufferSize = 20;
+      DebugUtil.clean(hTable);
+      writeFordAndChryslerData();
+      processUpdatesWithMrJob(mapBufferSize, twoMegabytes);
+      verifyLastFordAndChryslerSalesWithNativeScanner();
+
+      // Testing one more time now with record in the end of table which is not compacted
+      DebugUtil.clean(hTable);
+      writeFordAndChryslerData();
+      recordSale(hTable, TOYOTA, 23);
+      processUpdatesWithMrJob(4, twoMegabytes);
+      verifyLastFordAndChryslerSalesWithNativeScanner();
+      verifyLastSalesWithNativeScanner(hTable, TOYOTA, new int[] {23});
 
 
+    } finally { // TODO: do we really need try/finally block here?
+      testingUtility.shutdownMiniMapReduceCluster();
+    }
+  }
+
+  private void processUpdatesWithMrJob(int mapBufferSize, long mapBufferSizeInBytes) throws IOException, InterruptedException, ClassNotFoundException {
+    System.out.println(DebugUtil.getContentAsText(hTable));
+
+    Configuration configuration = testingUtility.getConfiguration();
+    configuration.set("hut.mr.buffer.size", String.valueOf(mapBufferSize));
+    configuration.set("hut.mr.buffer.size.bytes", String.valueOf(mapBufferSizeInBytes));
+    Job job = new Job(configuration);
+    UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
+
+    boolean success = job.waitForCompletion(true);
+    Assert.assertTrue(success);
+
+    System.out.println(DebugUtil.getContentAsText(hTable));
+  }
+
+  private void writeFordAndChryslerData() throws InterruptedException, IOException {
+    for (int i = 0; i < 15; i++) {
+      byte[] company;
+      if (i % 2 == 0) {
+        company = FORD;
+      } else {
+        company = CHRYSLER;
+      }
+
+      recordSale(hTable, company, i);
+    }
+  }
+
+  private void verifyLastFordAndChryslerSalesWithCompation(UpdateProcessor updateProcessor) throws IOException {
+    verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
+    verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
+  }
+
+  private void verifyLastFordAndChryslerSalesWithNativeScanner() throws IOException {
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {14, 12, 10, 8, 6});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {13, 11, 9, 7, 5});
+  }
+
+  // TODO: add more test-cases for MR job
+  @Test
+  public void testPartialUpdatesProcessingMrJob() throws IOException, InterruptedException, ClassNotFoundException {
     try {
       // Writing data
-      byte[] chrysler = Bytes.toBytes("chrysler");
-      byte[] ford = Bytes.toBytes("ford");
-      byte[] toyota = Bytes.toBytes("toyota");
-
       for (int i = 0; i < 15; i++) {
         byte[] company;
         if (i % 2 == 0) {
-          company = ford;
+          company = FORD;
         } else {
-          company = chrysler;
+          company = CHRYSLER;
         }
 
         recordSale(hTable, company, i);
+
+        Thread.sleep(200);
       }
 
-      recordSale(hTable, toyota, 23);
+      recordSale(hTable, TOYOTA, 23);
 
-      System.out.println(DebugUtil.getContent(hTable));
+      System.out.println(DebugUtil.getContentAsText(hTable));
 
       Configuration configuration = testingUtility.getConfiguration();
       configuration.set("hut.mr.buffer.size", String.valueOf(10));
+      configuration.set("hut.processor.tsMod", String.valueOf(300));
       Job job = new Job(configuration);
-      UpdatesProcessingMrJob.initJob(tableName, new Scan(), StockSaleUpdateProcessor.class, job);
+      UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
 
-      job.waitForCompletion(true);
+      boolean success = job.waitForCompletion(true);
+      Assert.assertTrue(success);
 
-      System.out.println(DebugUtil.getContent(hTable));
+      // TODO: add code verification of proper partial compaction instead of manually observing in output
+      System.out.println(DebugUtil.getContentAsText(hTable));
 
-      verifyLastSalesWithNativeScanner(hTable, ford, new int[] {14, 12, 10, 8, 6});
-      verifyLastSalesWithNativeScanner(hTable, chrysler, new int[] {13, 11, 9, 7, 5});
-      verifyLastSalesWithNativeScanner(hTable, toyota, new int[] {23});
+      StockSaleUpdateProcessor updateProcessor = new StockSaleUpdateProcessor();
+      verifyLastSalesWithCompation(hTable, updateProcessor, FORD, new int[]{14, 12, 10, 8, 6});
+      verifyLastSalesWithCompation(hTable, updateProcessor, CHRYSLER, new int[]{13, 11, 9, 7, 5});
+      verifyLastSalesWithCompation(hTable, updateProcessor, TOYOTA, new int[]{23});
 
     } finally { // TODO: do we really need try/finally block here?
       testingUtility.shutdownMiniMapReduceCluster();
@@ -331,33 +410,213 @@ public class TestHBaseHut {
 
   @Test
   public void testDelete() throws IOException, InterruptedException {
-    HTable hTable = testingUtility.createTable(Bytes.toBytes("stock-market"), SALE_CF);
     StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
 
     // Writing data
-    byte[] chrysler = Bytes.toBytes("chrysler");
-    byte[] ford = Bytes.toBytes("ford");
-    Delete deleteChrysler = new Delete(chrysler);
+    Delete deleteChrysler = new Delete(CHRYSLER);
 
     // Verifying that delete operation succeeds when no data exists
     hTable.delete(deleteChrysler);
 
-    verifyLastSales(hTable, processor, chrysler, new int[] {});
-    verifyLastSales(hTable, processor, ford, new int[] {});
-    recordSale(hTable, chrysler, 90);
-    recordSale(hTable, chrysler, 100);
-    recordSale(hTable, ford, 18);
-    recordSale(hTable, chrysler, 120);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {});
+    verifyLastSales(hTable, processor, FORD, new int[] {});
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
 
     HutUtil.delete(hTable, deleteChrysler);
-    verifyLastSales(hTable, processor, chrysler, new int[] {});
-    verifyLastSales(hTable, processor, ford, new int[] {18});
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {});
+    verifyLastSales(hTable, processor, FORD, new int[] {18});
 
-    recordSale(hTable, chrysler, 115);
-    recordSale(hTable, ford, 22);
-    recordSale(hTable, chrysler, 110);
-    verifyLastSales(hTable, processor, chrysler, new int[] {110, 115});
-    verifyLastSales(hTable, processor, ford, new int[] {22, 18});
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115});
+    verifyLastSales(hTable, processor, FORD, new int[] {22, 18});
+
+    hTable.close();
+  }
+
+  @Test
+  public void testRollback() throws IOException, InterruptedException {
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+
+    // Writing data
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {});
+    verifyLastSales(hTable, processor, FORD, new int[] {});
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
+    long ts0 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {18});
+
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
+    long ts1 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {22, 18});
+
+
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
+    long ts2 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[] {28, 24, 22, 18});
+
+    recordSale(hTable, CHRYSLER, 107);
+    recordSale(hTable, FORD, 32);
+    recordSale(hTable, FORD, 40);
+    recordSale(hTable, CHRYSLER, 113);
+    long ts3 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSales(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+
+    // performing rollbacks to ts1 and then to ts2
+    UpdatesProcessingUtil.rollbackWrittenAfter(hTable, ts2);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[] {28, 24, 22, 18});
+
+    UpdatesProcessingUtil.rollbackWrittenAfter(hTable, ts1);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {22, 18});
+
+    // writing more data and rolling back to ts0
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[]{105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[] {28, 24, 22, 18});
+
+    System.out.println(DebugUtil.getContentAsText(hTable));
+
+    UpdatesProcessingUtil.rollbackWrittenBetween(hTable, ts0, ts3);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {105, 120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[]{28, 24, 18});
+
+    hTable.close();
+  }
+
+  @Test
+  public void testRollbackWithMr() throws IOException, InterruptedException, ClassNotFoundException {
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+
+    // Writing data
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {});
+    verifyLastSales(hTable, processor, FORD, new int[] {});
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
+    long ts0 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {18});
+
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
+    long ts1 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[] {22, 18});
+
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
+    long ts2 = System.currentTimeMillis();
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[] {28, 24, 22, 18});
+
+    recordSale(hTable, CHRYSLER, 107);
+    recordSale(hTable, FORD, 32);
+    recordSale(hTable, FORD, 40);
+    recordSale(hTable, CHRYSLER, 113);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSales(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+
+    System.out.println(DebugUtil.getContentAsText(hTable));
+
+    // rolling back writes from ts1 to ts2
+    Job job = RollbackUpdatesMrJob.createSubmittableJob(testingUtility.getConfiguration(),
+                                                        new String[] {TABLE_NAME,
+                                                                String.valueOf(ts1), String.valueOf(ts2)});
+    boolean success = job.waitForCompletion(true);
+    Assert.assertTrue(success);
+
+    System.out.println(DebugUtil.getContentAsText(hTable));
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {113, 107, 110, 115, 120});
+    verifyLastSales(hTable, processor, FORD, new int[] {40, 32, 22, 18});
+
+    // writing more data and rolling back to ts0
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+    recordSale(hTable, FORD, 28);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[]{105, 113, 107, 110, 115});
+    verifyLastSales(hTable, processor, FORD, new int[] {28, 24, 40, 32, 22});
+
+    job = RollbackUpdatesMrJob.createSubmittableJob(testingUtility.getConfiguration(),
+            new String[]{TABLE_NAME, String.valueOf(ts0)});
+    success = job.waitForCompletion(true);
+    Assert.assertTrue(success);
+
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[]{18});
+
+    hTable.close();
+  }
+
+  // TODO: this is the simplest test for BufferedHutPutWriter, add more
+  @Test
+  public void testBufferedHutPutWriter() throws IOException, InterruptedException {
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+    BufferedHutPutWriter writer = new BufferedHutPutWriter(hTable, processor, 6);
+
+    // Writing data
+    writer.write(createPut(CHRYSLER, 90));
+    writer.write(createPut(CHRYSLER, 100));
+    writer.write(createPut(FORD, 18));
+    writer.write(createPut(CHRYSLER, 120));
+    writer.write(createPut(CHRYSLER, 115));
+    writer.write(createPut(FORD, 22));
+    writer.write(createPut(CHRYSLER, 110));
+
+    // writer should process updates for first group of records
+    // after processed updates has been stored, "native" HBase scanner should return processed results too
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+
+    writer.write(createPut(CHRYSLER, 105));
+    writer.write(createPut(FORD, 24));
+    writer.write(createPut(FORD, 28));
+    writer.write(createPut(CHRYSLER, 107));
+    writer.write(createPut(FORD, 32));
+
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {32, 28, 24, 22, 18});
+
+    writer.write(createPut(FORD, 40));
+    writer.write(createPut(CHRYSLER, 113));
+
+    writer.flush();
+
+    // we use compaction since updates were partially compacted by writer
+    // (since its max buffer size is less then total puts #)
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+
+    UpdatesProcessingUtil.processUpdates(hTable, processor);
+    // after processed updates has been stored, "native" HBase scanner should return processed results too
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
 
     hTable.close();
   }
@@ -375,11 +634,15 @@ public class TestHBaseHut {
   }
 
   private static void recordSale(HTable hTable, byte[] company, int price) throws InterruptedException, IOException {
-    Put put = new HutPut(company);
-    put.add(SALE_CF, Bytes.toBytes("lastPrice0"), Bytes.toBytes(price));
+    Put put = createPut(company, price);
     Thread.sleep(1); // sanity interval
     hTable.put(put);
+  }
 
+  private static HutPut createPut(byte[] company, int price) {
+    HutPut put = new HutPut(company);
+    put.add(SALE_CF, Bytes.toBytes("lastPrice0"), Bytes.toBytes(price));
+    return put;
   }
 
   private static void verifyLastSalesWithNativeScanner(HTable hTable, byte[] company, int[] prices) throws IOException {
@@ -389,8 +652,9 @@ public class TestHBaseHut {
   }
 
   private static void verifyLastSales(HTable hTable, UpdateProcessor updateProcessor, byte[] company, int[] prices) throws IOException {
+    ResultScanner scanner = hTable.getScanner(getCompanyScan(company));
     ResultScanner resultScanner =
-            new HutResultScanner(hTable.getScanner(getCompanyScan(company)), updateProcessor);
+            new HutResultScanner(scanner, updateProcessor);
     Result result = resultScanner.next();
     verifyLastSales(result, prices);
   }
@@ -434,11 +698,5 @@ public class TestHBaseHut {
         Assert.assertNull(lastStoredPrice);
       }
     }
-  }
-
-  @After
-  public void after() throws IOException {
-    testingUtility.shutdownMiniCluster();
-    testingUtility = null;
   }
 }

@@ -15,23 +15,21 @@
  */
 package com.sematext.hbase.hut;
 
-import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.util.ProgramDriver;
 
 /**
- * Performs records processing.
- * Implementation SHOULD be stateless and thread-safe
+ * Driver for HBaseHUT mapreduce jobs. Select which to run by passing
+ * name of job to this main.
+ *
  */
-public abstract class UpdateProcessor {
-  public abstract void process(Iterable<Result> records, UpdateProcessingResult processingResult);
+public final class Driver {
+  private Driver() {}
 
-  /**
-   * Allows to skip merging of records even if HBase core decided to merge them.
-   * Adds extra flexibility to skip unnecessary merging of records.
-   *
-   * @param originalKey original key of the records about to be merged
-   * @return true if merge needed, false otherwise
-   */
-  public boolean isMergeNeeded(byte[] originalKey) {
-    return true;
+  public static void main(String[] args) throws Throwable {
+    ProgramDriver pgd = new ProgramDriver();
+    pgd.addClass(RollbackUpdatesMrJob.NAME, RollbackUpdatesMrJob.class,
+            "Rolls back updates");
+    // TODO: add UpdatesProcessingMrJob to the list
+    pgd.driver(args);
   }
 }

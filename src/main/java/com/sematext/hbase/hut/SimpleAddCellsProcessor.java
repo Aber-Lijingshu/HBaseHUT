@@ -18,20 +18,13 @@ package com.sematext.hbase.hut;
 import org.apache.hadoop.hbase.client.Result;
 
 /**
- * Performs records processing.
- * Implementation SHOULD be stateless and thread-safe
+ * Performs simple processing of records: just adds all columns from records to the result one.
  */
-public abstract class UpdateProcessor {
-  public abstract void process(Iterable<Result> records, UpdateProcessingResult processingResult);
-
-  /**
-   * Allows to skip merging of records even if HBase core decided to merge them.
-   * Adds extra flexibility to skip unnecessary merging of records.
-   *
-   * @param originalKey original key of the records about to be merged
-   * @return true if merge needed, false otherwise
-   */
-  public boolean isMergeNeeded(byte[] originalKey) {
-    return true;
+public class SimpleAddCellsProcessor extends UpdateProcessor {
+  @Override
+  public void process(Iterable<Result> records, UpdateProcessingResult processingResult) {
+    for (Result record : records) {
+      processingResult.add(record.raw());
+    }
   }
 }

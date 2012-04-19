@@ -15,8 +15,12 @@
  */
 package com.sematext.hbase.hut;
 
+import java.io.IOException;
+import java.util.LinkedList;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
@@ -29,61 +33,46 @@ import org.apache.hadoop.hbase.mapreduce.TableMapper;
 import org.apache.hadoop.hbase.mapreduce.TableReducer;
 import org.apache.hadoop.mapreduce.Job;
 
-import java.io.IOException;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-
 /**
  * Perform processing updates by running MapReduce job, and hence utilizes data locality during work (to some extend).
+ * TODO: Think over implementing map-only job for doing compaction. Which
+ * should work much faster. Map-only job
+ * may cause some spans of records to be compacted into multiple result
+ * records, which is usually (always?) ok. Multiple updates processing
+ * results records should be supported already. One concern is about writing
+ * into same table from a Mapper which may cause issues.
  */
 public final class UpdatesProcessingMrJob {
   private UpdatesProcessingMrJob() {}
 
   public static class UpdatesProcessingMapper extends TableMapper<ImmutableBytesWritable, Put> {
     public static final String HUT_MR_BUFFER_SIZE_ATTR = "hut.mr.buffer.size";
+    public static final String HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR = "hut.mr.buffer.size.bytes";
     public static final String HUT_PROCESSOR_CLASS_ATTR = "hut.processor.class";
+    public static final String HUT_PROCESSOR_TSMOD_ATTR = "hut.processor.tsMod";
     private static final Log LOG = LogFactory.getLog(UpdatesProcessingMapper.class);
 
     // buffer for items read by map()
-    private int bufferMaxSize = 1000; // can be overridden by HUT_MR_BUFFER_SIZE_ATTR attribute in configuration
-    private Result[] buff;
-    // these two volatile variables needed to provide visibility of changes made by two threads
-    private volatile int filledInBuff;
-    private volatile int nextInBuff;
+    // can be overridden by HUT_MR_BUFFER_SIZE_ATTR attribute in configuration
+    private int bufferMaxSize = 1000;
 
-    private Thread processingThread;
+    // buffer for items read by map()
+    // can be overridden by HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR attribute in configuration
+    private int bufferMaxSizeInBytes = 32 * 1024 * 1024; // 32 MB
 
-    private ReentrantLock lock = new ReentrantLock(false);
-    private Condition waitingOnEmptyBuffer = lock.newCondition();
-    private Condition waitingOnAllBufferConsumed = lock.newCondition();
+    // TODO: describe
+    private long tsMod = 0; // can be overridden by HUT_PROCESSOR_TSMOD_ATTR attribute in configuration
+
+    // queue with map input records to be fed into updates processor
+    private LinkedList<Result> mapInputBuff;
+    private long bytesInBuffer;
+    // used to process updates TODO: think over reimplementing processing updates for MR case to not stick to scan case
+    private DetachedHutResultScanner resultScanner;
+    // used to keep last processed update when buffer was emptied (before filled again) - see more comments in the code
+    private Put readyToStoreButWaitingFurtherMerging = null;
 
     // map task state
     private volatile boolean failed;
-    private volatile boolean finished;
-
-    // No need to make buff operations thread-safe as buffer is going to accessed from single thread at a time
-    private boolean isBufferExhausted() {
-      return filledInBuff - nextInBuff <= 0;
-    }
-
-    // No need to make buff operations thread-safe as buffer is going to accessed from single thread at a time
-    private boolean isBufferFull() {
-      return filledInBuff >= bufferMaxSize;
-    }
-
-    // No need to make buff operations thread-safe as buffer is going to accessed from single thread at a time
-    private Result popFromBuff() {
-      return buff[nextInBuff++];
-    }
-
-    // No need to make buff operations thread-safe as buffer is going to accessed from single thread at a time
-    private void pushToBuff(Result result) {
-      if (isBufferFull()) {
-        filledInBuff = 0;
-        nextInBuff = 0;
-      }
-      buff[filledInBuff++] = result;
-    }
 
     /**
      * Detached from HTable and ResultScanner scanner that is being fed with {@link org.apache.hadoop.hbase.client.Result} items.
@@ -94,6 +83,15 @@ public final class UpdatesProcessingMrJob {
 
       public DetachedHutResultScanner(UpdateProcessor updateProcessor) {
         super(null, updateProcessor, null, true);
+      }
+
+      @Override
+      protected boolean isMergeNeeded(byte[] firstKey, byte[] secondKey) {
+        if (tsMod <= 0) {
+          return super.isMergeNeeded(firstKey, secondKey);
+        } else {
+          return HutRowKeyUtil.sameOriginalKeys(firstKey, secondKey, tsMod);
+        }
       }
 
       @Override
@@ -122,27 +120,7 @@ public final class UpdatesProcessingMrJob {
       }
 
       Result fetchNext() throws IOException {
-        // trying to fetch data from nextItemsToFetch buffer
-        if (isBufferExhausted()) {
-          if (finished) { // no more items expected
-            return null;
-          }
-          lock.lock();
-          try {
-            while (isBufferExhausted()) {
-              try {
-                waitingOnAllBufferConsumed.signal();
-                waitingOnEmptyBuffer.await();
-              } catch (InterruptedException e) {
-                // DO NOTHING
-              }
-            }
-          } finally {
-            lock.unlock();
-          }
-        }
-
-        return popFromBuff();
+        return fetchNextFromBuffer();
       }
 
       public Put getProcessedUpdatesToStore() {
@@ -160,19 +138,121 @@ public final class UpdatesProcessingMrJob {
      * @throws InterruptedException When the job is aborted.
      */
     public void map(ImmutableBytesWritable key, Result value, Context context) throws IOException, InterruptedException {
-      if (isBufferFull()) {
-        try {
-          lock.lock();
-          while (!isBufferExhausted()) {
-            waitingOnEmptyBuffer.signal();
-            waitingOnAllBufferConsumed.await();
-          }
-        } finally {
-          lock.unlock();
-        }
+      addToMapInputBuffer(value);
+      if (!isMapInputBufferFull()) {
+        return;
       }
 
-      pushToBuff(value);
+      // more or less reasonable: attempt to ping every time when switching to process buffered records
+      pingMap(context); // TODO: allow user control pinging
+
+      try {
+        Result res = resultScanner.next();
+        Result prev = null;
+        Put processingResultToStore = null;
+        while (res != null) {
+          // we save previous record in case processingResultToStore is null and this is the last
+          // element in buffer. In that case we will put it back to buffer to give it a chance to merge
+          // with next items coming to map method
+          prev = res;
+
+          // if merging occurred, it will be stored as processingResultToStore
+          processingResultToStore = resultScanner.getProcessedUpdatesToStore();
+
+          // last processing result from previous buffered records
+          // got chance to be merged, but looks like next record is from different group (i.e. no merge occurred)
+          if (processingResultToStore == null && readyToStoreButWaitingFurtherMerging != null) {
+            emit(context, readyToStoreButWaitingFurtherMerging);
+          }
+          // setting to null in any case:
+          // * either it was written above or
+          // * was merged with next records and will be written below
+          readyToStoreButWaitingFurtherMerging = null;
+
+          res = resultScanner.next();
+          boolean lastInBuffer = res == null;
+          // We don't want to store last processed result *now*,
+          // instead we postpone storing it to give it a chance to merge with next map input records down the road.
+          if (!lastInBuffer) {
+            if (processingResultToStore != null) {
+              emit(context, processingResultToStore);
+            }
+          }
+        }
+
+        if (prev != null) {
+          // see explanation near assignment
+          boolean added = addToMapInputBufferIfSpaceAvailable(prev);
+
+          if (!added && processingResultToStore != null) {
+            emit(context, processingResultToStore);
+            return;
+          }
+
+          readyToStoreButWaitingFurtherMerging = processingResultToStore;
+        }
+      } catch (IOException e) {
+        LOG.error(e);
+        // TODO: do we really want to fail the whole job? or just skip processing these group of updates
+        failed = true; // marking job as failed
+      } catch (InterruptedException e) {
+        LOG.error(e);
+        // TODO: do we really want to fail the whole job? or just skip processing these group of updates
+        failed = true; // marking job as failed
+      }
+
+    }
+
+    private Result fetchNextFromBuffer() {
+      if (mapInputBuff.size() == 0) {
+        return null;
+      }
+
+      Result r = mapInputBuff.poll();
+      bytesInBuffer -= getSize(r);
+      return r;
+    }
+
+    private void addToMapInputBuffer(Result value) {
+      bytesInBuffer += getSize(value);
+      mapInputBuff.addLast(value);
+    }
+
+    private boolean addToMapInputBufferIfSpaceAvailable(Result value) {
+      if (bytesInBuffer + getSize(value) <= bufferMaxSizeInBytes) {
+        addToMapInputBuffer(value);
+        return true;
+      }
+
+      return false;
+    }
+
+    private static int getSize(Result value) {
+      // TODO: is this the best way of calculating size? Tried using getBytes() but it sometimes returns null
+      int size = 0;
+      for (KeyValue kv : value.raw()) {
+        size += kv.getLength();
+      }
+
+      return size;
+    }
+
+    private boolean isMapInputBufferFull() {
+      return mapInputBuff.size() >= bufferMaxSize || bytesInBuffer >= bufferMaxSizeInBytes;
+    }
+
+    private void emit(Context context, Put processingResultToStore) throws IOException, InterruptedException {
+      context.write(new ImmutableBytesWritable(processingResultToStore.getRow()), processingResultToStore);
+    }
+
+    private long lastPingTimeMap = System.currentTimeMillis();
+
+    public void pingMap(Context context) {
+      final long currtime = System.currentTimeMillis();
+      if (currtime - lastPingTimeMap > 2000) {
+        context.progress();
+        lastPingTimeMap = currtime;
+      }
     }
 
     @Override
@@ -184,57 +264,69 @@ public final class UpdatesProcessingMrJob {
         throw new IllegalStateException("hut.processor.class missed in the configuration");
       }
       final UpdateProcessor updateProcessor = createInstance(updatesProcessorClass, UpdateProcessor.class);
+      LOG.info("Using updateProcessor: " + updateProcessor.getClass());
+
+      if (updateProcessor instanceof Configurable) {
+        ((Configurable) updateProcessor).configure(context.getConfiguration());
+      }
+
+      if (updateProcessor instanceof MapContextAware) {
+        ((MapContextAware) updateProcessor).setContext(context);
+      }
 
       String bufferSizeValue =  context.getConfiguration().get(HUT_MR_BUFFER_SIZE_ATTR);
       if (bufferSizeValue == null) {
         LOG.info(HUT_MR_BUFFER_SIZE_ATTR + " is missed in the configuration, using default value: " + bufferMaxSize);
       } else {
         bufferMaxSize = Integer.valueOf(bufferSizeValue);
+        LOG.info("Using bufferMaxSize: " + bufferMaxSize);
       }
 
-      buff = new Result[bufferMaxSize];
-      filledInBuff = 0;
-      nextInBuff = 0;
-      finished = false;
-      failed = false;
+      String bufferMaxSizeInBytesValue =  context.getConfiguration().get(HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR);
+      if (bufferMaxSizeInBytesValue == null) {
+        LOG.info(HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR + " is missed in the configuration, using default value: " + bufferMaxSizeInBytes);
+      } else {
+        bufferMaxSizeInBytes = Integer.valueOf(bufferMaxSizeInBytesValue);
+        LOG.info("Using bufferMaxSizeInBytes: " + bufferMaxSizeInBytes);
+      }
 
-      processingThread = new Thread(new Runnable() {
-        @Override
-        public void run() {
-          DetachedHutResultScanner resultScanner = new DetachedHutResultScanner(updateProcessor);
-          try {
-            Result res = resultScanner.next();
-            while (res != null) {
-              Put processingResultToStore = resultScanner.getProcessedUpdatesToStore();
-              if (processingResultToStore != null) {
-                context.write(new ImmutableBytesWritable(processingResultToStore.getRow()), processingResultToStore);
-              }
-              res = resultScanner.next();
-            }
-          } catch (IOException e) {
-            LOG.error(e);
-            failed = true; // marking job as failed
-          } catch (InterruptedException e) {
-            LOG.error(e);
-            failed = true; // marking job as failed
-          }
-        }
-      });
-      processingThread.start();
+      String tsModValue =  context.getConfiguration().get(HUT_PROCESSOR_TSMOD_ATTR);
+      if (tsModValue == null) {
+        LOG.info(HUT_PROCESSOR_TSMOD_ATTR + " is missed in the configuration, using default value: " + tsMod);
+      } else {
+        tsMod = Long.valueOf(tsModValue);
+        LOG.info("Using tsMod: " + tsMod);
+      }
+
+      mapInputBuff = new LinkedList<Result>();
+      bytesInBuffer = 0;
+      resultScanner = new DetachedHutResultScanner(updateProcessor);
+      failed = false;
     }
 
     @Override
     protected void cleanup(Context context) throws IOException, InterruptedException {
-      if (!isBufferExhausted()) { // passing non-consumed items
-        try {
-          lock.lock();
-          finished = true;
-          waitingOnEmptyBuffer.signal();
-        } finally {
-          lock.unlock();
+      if (mapInputBuff.size() > 0) {
+        Result res = resultScanner.next();
+        while (res != null) {
+          Put processingResultToStore = resultScanner.getProcessedUpdatesToStore();
+
+          // last processing result from previous buffered records
+          // got chance to be merged, but looks like next record is from different group (i.e. no merge occurred)
+          if (processingResultToStore == null && readyToStoreButWaitingFurtherMerging != null) {
+            emit(context, readyToStoreButWaitingFurtherMerging);
+          }
+
+          if (processingResultToStore != null) {
+            emit(context, processingResultToStore);
+          }
+          res = resultScanner.next();
         }
+
       }
-      processingThread.join();
+
+      mapInputBuff.clear();
+      bytesInBuffer = 0;
 
       if (failed) {
         throw new RuntimeException("Job was marked as failed");
@@ -319,5 +411,6 @@ public final class UpdatesProcessingMrJob {
     job.setJarByClass(UpdatesProcessingMrJob.class);
     job.getConfiguration().set(UpdatesProcessingReducer.HTABLE_ATTR_NAME, table);
     job.getConfiguration().set(UpdatesProcessingMapper.HUT_PROCESSOR_CLASS_ATTR, updateProcessorClass.getName());
+    job.getConfiguration().set("mapred.map.tasks.speculative.execution", "false"); // TODO: explain
   }
 }

@@ -15,23 +15,11 @@
  */
 package com.sematext.hbase.hut;
 
-import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.mapreduce.Mapper;
 
 /**
- * Performs records processing.
- * Implementation SHOULD be stateless and thread-safe
+ * Defines object that can access {@link Mapper.Context}
  */
-public abstract class UpdateProcessor {
-  public abstract void process(Iterable<Result> records, UpdateProcessingResult processingResult);
-
-  /**
-   * Allows to skip merging of records even if HBase core decided to merge them.
-   * Adds extra flexibility to skip unnecessary merging of records.
-   *
-   * @param originalKey original key of the records about to be merged
-   * @return true if merge needed, false otherwise
-   */
-  public boolean isMergeNeeded(byte[] originalKey) {
-    return true;
-  }
+public interface MapContextAware {
+  void setContext(Mapper.Context context);
 }

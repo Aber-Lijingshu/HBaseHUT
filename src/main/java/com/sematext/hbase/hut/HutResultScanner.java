@@ -80,26 +80,42 @@ public class HutResultScanner implements ResultScanner {
       return firstResult;
     }
 
-    if (!HutRowKeyUtil.sameOriginalKeys(firstResult.getRow(), nextToFirstResult.getRow())) {  // nothing to process
+    if (!isMergeNeeded(firstResult.getRow(), nextToFirstResult.getRow())) {  // nothing to process
       nonConsumed = nextToFirstResult;
       return firstResult;
     }
 
     iterableRecords.init(firstResult, nextToFirstResult);
-    processingResult.init(firstResult.getRow(), firstResult.raw());
-    updateProcessor.process(iterableRecords, processingResult);
+    // TODO: allow decide to skip merging at processing time
+
+    Result result;
+    // hook for fastforwarding thru records with particular original key in case no need to merge them
+    // TODO: modify API of processor to return true/false instead of extra method?
+    // TODO: adjust API of updateProcessor.isMergeNeeded method (add offset/length params) to avoid creating extra objects
+    if (updateProcessor.isMergeNeeded(HutRowKeyUtil.getOriginalKey(firstResult.getRow()))) {
+      processingResult.init(firstResult.getRow());
+      updateProcessor.process(iterableRecords, processingResult);
+
+      result = processingResult.getResult();
+      if (storeProcessedUpdates) {
+        storeProcessedUpdates(result, iterableRecords.iterator.lastRead);
+      }
+    } else {
+      // actually this should be ignored, as the hook for skipping processing is for compaction job only
+      result = firstResult;
+    }
+
     // TODO: allow client code specify skipping this?
     // Reading records of this group to the end
     while (iterableRecords.iterator.hasNext()) {
       iterableRecords.iterator.next();
     }
 
-    Result result = processingResult.getResult();
-    if (storeProcessedUpdates) {
-      storeProcessedUpdates(result, iterableRecords.iterator.lastRead);
-    }
-
     return result;
+  }
+
+  protected boolean isMergeNeeded(byte[] firstKey, byte[] secondKey) {
+    return HutRowKeyUtil.sameOriginalKeys(firstKey, secondKey);
   }
 
   Result fetchNext() throws IOException {
@@ -174,18 +190,51 @@ public class HutResultScanner implements ResultScanner {
     resultScanner.close();
   }
 
-  private static class UpdateProcessingResultImpl implements UpdateProcessingResult {
-    private KeyValue[] kvs;
+  static class UpdateProcessingResultImpl implements UpdateProcessingResult {
+    private KeyValue[] kvs; // TODO: consider using a List
     private byte[] row;
 
-    public void init(byte[] row, KeyValue[] kvs) {
-      this.kvs = kvs;
+    public void init(byte[] row) {
       this.row = row;
+      this.kvs = new KeyValue[0];
+    }
+
+    @Override
+    public void add(KeyValue[] kvs) {
+      // TODO: not efficient! underlying kvs array will be expanded multiple times instead of onces
+      for (KeyValue kv : kvs) {
+        add(kv);
+      }
+    }
+
+    // TODO: revise this method implementation, it can be done better (and/or more efficient)
+    // TODO: compare with add(byte[] colFam, byte[] qualifier, byte[] value) method, possible option for refactoring
+    @Override
+    public void add(KeyValue kvToAdd) {
+      overrideRow(kvToAdd, row);
+
+      // TODO: do we really need doing merge here? Won't it override things automatically? Also: we compromise support of multiple versions here
+      boolean found = false;
+      for (int i = 0; i < kvs.length; i++) {
+        KeyValue kv = kvs[i];
+        // TODO: make use of timestamp value when comparing?
+        // TODO: use KVComparator?
+        if( Bytes.equals(kvToAdd.getFamily(), kv.getFamily()) && Bytes.equals(kvToAdd.getQualifier(), kv.getQualifier())) {
+          kvs[i] = kvToAdd;
+          found = true;
+          break; // TODO: do we need to update here other KeyValues (or just most recent one)?
+        }
+      }
+      if (!found) {
+        kvs = Arrays.copyOf(kvs, kvs.length + 1); // TODO: looks like not vey optimal
+        kvs[kvs.length - 1] = kvToAdd;
+      }
     }
 
     // TODO: revise this method implementation, it can be done better (and/or more efficient)
     @Override
     public void add(byte[] colFam, byte[] qualifier, byte[] value) {
+      // TODO: do we really need doing merge here? Won't it override things automatically? Also: we compromise support of multiple versions here
       // TODO: Defer merging to getResult method?
       boolean found = false;
       for (int i = 0; i < kvs.length; i++) {
@@ -287,7 +336,7 @@ public class HutResultScanner implements ResultScanner {
           }
 
           // TODO: nextCandidate.getRow() reads all fields (HBase internal implementation), but we actually may need only row here
-          boolean sameOriginalKeys = HutRowKeyUtil.sameOriginalKeys(firstRecordKey, nextCandidate.getRow());
+          boolean sameOriginalKeys = isMergeNeeded(firstRecordKey, nextCandidate.getRow());
 
           if (!sameOriginalKeys) {
             nonConsumed = nextCandidate;
@@ -305,7 +354,7 @@ public class HutResultScanner implements ResultScanner {
               exhausted = true;
               return false;
             }
-            sameOriginalKeys = HutRowKeyUtil.sameOriginalKeys(firstRecordKey, nextCandidate.getRow());
+            sameOriginalKeys = isMergeNeeded(firstRecordKey, nextCandidate.getRow());
           }
 
           if (!sameOriginalKeys) {
@@ -369,19 +418,38 @@ public class HutResultScanner implements ResultScanner {
     }
   }
 
-  private void storeProcessedUpdates(Result first, Result last) throws IOException {
-    byte[] firstRow = first.getRow();
-    byte[] row = Arrays.copyOf(firstRow, firstRow.length);
-    HutRowKeyUtil.setIntervalEnd(row, last.getRow()); // can row here remain the same?
-    Put put = new Put(row);
-    for (KeyValue kv : first.raw()) {
-      // overriding row TODO: do we need to invalidate row cache of kv here?
-      overrideRow(kv, row);
-      put.add(kv);
-    }
+  private void storeProcessedUpdates(Result processingResult, Result last) throws IOException {
+    // processing result was stored in the first record of the processed interval,
+    // hence we can utilize its write time as start time for the compressed interval
+    byte[] firstRow = processingResult.getRow();
+    byte[] lastRow = last.getRow();
+    Put put = createPutWithProcessedResult(processingResult, firstRow, lastRow);
+
 
     store(put);
-    deleteProcessedRecords(first.getRow(), last.getRow(), row);
+    deleteProcessedRecords(processingResult.getRow(), lastRow, put.getRow());
+  }
+
+  // TODO: move this method out of this class? (looks like utility method)
+  static Put createPutWithProcessedResult(Result processingResult, byte[] firstRow, byte[] lastRow) throws IOException {
+    // adjusting row, so that it "covers" interval from first record to last record
+    byte[] row = Arrays.copyOf(firstRow, firstRow.length);
+    HutRowKeyUtil.setIntervalEnd(row, lastRow); // can row here remain the same?
+
+    return createPutWithProcessedResult(processingResult, row);
+  }
+
+  private static Put createPutWithProcessedResult(Result processingResult, byte[] row) throws IOException {
+    Put put = new Put(row);
+    for (KeyValue kv : processingResult.raw()) {
+      // using copying here, otherwise processingResult is affected when its
+      // keyvalues are changed. TODO: think over better approach? Previously same kv was used and things went well
+      byte[] kvBytes = Arrays.copyOfRange(kv.getBuffer(), kv.getOffset(), kv.getOffset() + kv.getLength());
+      KeyValue toWrite = new KeyValue(kvBytes);
+      overrideRow(toWrite, row);
+      put.add(toWrite);
+    }
+    return put;
   }
 
   void store(Put put) throws IOException {
@@ -390,7 +458,9 @@ public class HutResultScanner implements ResultScanner {
 
   // NOTE: this works only when rows has the same length, and doesn't invalidate row cache
   static void overrideRow(KeyValue kv, byte[] row) {
-    System.arraycopy(row, 0, kv.getBuffer(), kv.getRowOffset(), kv.getRowLength());
+    // TODO: Does it makes sense to check if there's need for overriding first? Will it be more efficient?
+    System.arraycopy(row, 0, kv.getBuffer(), kv.getRowOffset(), row.length);
+
   }
 
   void deleteProcessedRecords(byte[] firstInclusive, byte[] lastInclusive, byte[] processingResultToLeave) throws IOException {

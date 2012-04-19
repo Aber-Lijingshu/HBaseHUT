@@ -26,7 +26,8 @@ import org.apache.hadoop.hbase.util.Bytes;
  * the whole interval of records with creationTime between these two values.
  */
 public final class HutRowKeyUtil {
-  private static final byte[] NOT_SET_MARK = Bytes.toBytes(0L);
+  private static final long NOT_SET_MARK_VAL = 0L;
+  private static final byte[] NOT_SET_MARK = Bytes.toBytes(NOT_SET_MARK_VAL);
 
   private HutRowKeyUtil() {}
 
@@ -35,8 +36,34 @@ public final class HutRowKeyUtil {
   }
 
   static boolean sameOriginalKeys(byte[] hutRowKey1, byte[] hutRowKey2) {
+    // TODO: review whether we need *lexographic* comparison
     return 0 == Bytes.compareTo(hutRowKey1, 0, hutRowKey1.length - Bytes.SIZEOF_LONG * 2,
                                 hutRowKey2, 0, hutRowKey2.length - Bytes.SIZEOF_LONG * 2);
+  }
+
+  // TODO: add unit-test
+  static boolean sameOriginalKeys(byte[] hutRowKey1, byte[] hutRowKey2, long mod) {
+    if (0 != Bytes.compareTo(hutRowKey1, 0, hutRowKey1.length - Bytes.SIZEOF_LONG * 2,
+                                hutRowKey2, 0, hutRowKey2.length - Bytes.SIZEOF_LONG * 2)) {
+      return false;
+    }
+
+    long firstKeyIntervalStart = Bytes.toLong(hutRowKey1,
+            hutRowKey1.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long firstKeyIntervalStop = Bytes.toLong(hutRowKey1,
+            hutRowKey1.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
+    long secondKeyIntervalStart = Bytes.toLong(hutRowKey2,
+            hutRowKey2.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long secondKeyIntervalStop = Bytes.toLong(hutRowKey2,
+            hutRowKey2.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
+
+    boolean same = (firstKeyIntervalStart / mod) == (secondKeyIntervalStart / mod);
+    same = firstKeyIntervalStop == NOT_SET_MARK_VAL ? same :
+            same && (firstKeyIntervalStart / mod) == (firstKeyIntervalStop / mod);
+    same = secondKeyIntervalStop == NOT_SET_MARK_VAL ? same :
+            same && (secondKeyIntervalStart / mod) == (secondKeyIntervalStop / mod);
+
+    return same;
   }
 
   // TODO: rename it or explain
@@ -57,8 +84,8 @@ public final class HutRowKeyUtil {
                                 hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG) > 0;
   }
 
-  static byte[] createNewKey(byte[] rowKeyWithIntervalStart, long creationTime) {
-    return Bytes.add(rowKeyWithIntervalStart, Bytes.toBytes(creationTime), NOT_SET_MARK);
+  static byte[] createNewKey(byte[] original, long creationTime) {
+    return Bytes.add(original, Bytes.toBytes(creationTime), NOT_SET_MARK);
   }
 
   static byte[] getStartRowOfInterval(byte[] hutRowKey) {
@@ -92,5 +119,23 @@ public final class HutRowKeyUtil {
       System.arraycopy(lastRowKeyInInterval, lastRowKeyInInterval.length - Bytes.SIZEOF_LONG * 2,
                        hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
     }
+  }
+
+  static boolean writtenAfter(byte[] hutRowKey, long startTsInclusive) {
+    long startInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    return startTsInclusive <= startInterval;
+  }
+
+  static boolean writtenBefore(byte[] hutRowKey, long stopTsInclusive) {
+    long rowStartInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long rowStopInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
+    return (NOT_SET_MARK_VAL == rowStopInterval ? stopTsInclusive >= rowStartInterval : stopTsInclusive >= rowStopInterval);
+  }
+
+  static boolean writtenBetween(byte[] hutRowKey, long startTsInclusive, long stopTsInclusive) {
+    long rowStartInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG * 2, Bytes.SIZEOF_LONG);
+    long rowStopInterval = Bytes.toLong(hutRowKey, hutRowKey.length - Bytes.SIZEOF_LONG, Bytes.SIZEOF_LONG);
+    return startTsInclusive <= rowStartInterval &&
+            (NOT_SET_MARK_VAL == rowStopInterval ? stopTsInclusive >= rowStartInterval : stopTsInclusive >= rowStopInterval);
   }
 }
