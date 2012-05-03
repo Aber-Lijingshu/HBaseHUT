@@ -26,13 +26,16 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.LinkedList;
 
 /**
  * HBaseHUT {@link org.apache.hadoop.hbase.client.ResultScanner} implementation.
  * Use it when scanning records written as {@link com.sematext.hbase.hut.HutPut}s
+ * TODO: needs refactoring: extract base class ResultScanner "wrapper" independent on the actual data source
  */
 public class HutResultScanner implements ResultScanner {
   private final ResultScanner resultScanner;
+  private final ResultsAccessor resultsAccessor;
   private Result nonConsumed = null;
   private final UpdateProcessor updateProcessor;
   private boolean storeProcessedUpdates;
@@ -42,16 +45,24 @@ public class HutResultScanner implements ResultScanner {
   // Can be converted to local variable, but we want to reuse processingResult instance
   private UpdateProcessingResultImpl processingResult = new UpdateProcessingResultImpl();
 
+  private int minRecordsToProcess = 1;
+
   public HutResultScanner(ResultScanner resultScanner, UpdateProcessor updateProcessor) {
     this(resultScanner, updateProcessor, null, false);
   }
 
-  public HutResultScanner(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
+  public HutResultScanner(ResultScanner resultScanner, UpdateProcessor updateProcessor,
+                          HTable hTable, boolean storeProcessedUpdates) {
     verifyInitParams(resultScanner, updateProcessor, hTable, storeProcessedUpdates);
     this.resultScanner = resultScanner;
+    this.resultsAccessor = new ResultsAccessor();
     this.updateProcessor = updateProcessor;
     this.storeProcessedUpdates = storeProcessedUpdates;
     this.hTable = hTable;
+  }
+
+  public void setMinRecordsToProcess(int minRecordsToProcess) {
+    this.minRecordsToProcess = minRecordsToProcess;
   }
 
   void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
@@ -68,19 +79,29 @@ public class HutResultScanner implements ResultScanner {
 
   @Override
   public Result next() throws IOException {
-    Result firstResult = nonConsumed != null ? nonConsumed : fetchNext();
+    Result firstResult = nonConsumed != null ? nonConsumed : resultsAccessor.next();
     nonConsumed = null;
 
     if (firstResult == null) {
       return firstResult;
     }
 
-    Result nextToFirstResult = fetchNext();
+    Result nextToFirstResult = resultsAccessor.next();
     if (nextToFirstResult == null) {
       return firstResult;
     }
 
-    if (!isMergeNeeded(firstResult.getRow(), nextToFirstResult.getRow())) {  // nothing to process
+    boolean mergeNeeded = isMergeNeeded(firstResult.getRow(), nextToFirstResult.getRow());
+    if (mergeNeeded && minRecordsToProcess > 2) {
+      // fetching (minRecordsToProcess)th to see if there are at least minRecordsToProcess records to merge
+      Result nth = resultsAccessor.getNth(minRecordsToProcess - 2);
+      if (nth == null || !isMergeNeeded(firstResult.getRow(), nth.getRow())) {
+        resultsAccessor.advanceThruPrefetchedWhileOriginalKeySame(minRecordsToProcess - 2, firstResult.getRow());
+        return firstResult;
+      }
+    }
+
+    if (!mergeNeeded) {  // nothing to process
       nonConsumed = nextToFirstResult;
       return firstResult;
     }
@@ -97,7 +118,8 @@ public class HutResultScanner implements ResultScanner {
       updateProcessor.process(iterableRecords, processingResult);
 
       result = processingResult.getResult();
-      if (storeProcessedUpdates) {
+      // TODO: handle empty processing result better, code refactoring needed
+      if (storeProcessedUpdates && !processingResult.isEmpty()) {
         storeProcessedUpdates(result, iterableRecords.iterator.lastRead);
       }
     } else {
@@ -111,6 +133,7 @@ public class HutResultScanner implements ResultScanner {
       iterableRecords.iterator.next();
     }
 
+    // TODO: if result is empty we should not return it, but rather fetch next
     return result;
   }
 
@@ -119,7 +142,7 @@ public class HutResultScanner implements ResultScanner {
   }
 
   Result fetchNext() throws IOException {
-    return resultScanner.next();
+    return resultScanner.next(); // TODO: make sure caching is used to reduce RPC requests number
   }
 
   @Override
@@ -271,8 +294,60 @@ public class HutResultScanner implements ResultScanner {
       }
     }
 
+    public boolean isEmpty() {
+      // TODO: can row be actualy null?
+      return kvs == null || kvs.length == 0 || row == null;
+    }
+
     public Result getResult() {
       return new Result(kvs);
+    }
+  }
+
+  private class ResultsAccessor {
+    private LinkedList<Result> prefetched = new LinkedList<Result>();
+
+    public Result next() throws IOException {
+      if (prefetched.size() == 0) {
+        return fetchNext();
+      }
+
+      return prefetched.pollFirst();
+    }
+
+    // TODO: rename to smth like "get (but don't fetch) Nth from ahead"
+    public Result getNth(int i) throws IOException {
+      if (prefetched.size() < i) {
+        for (int k = 0; k < i - prefetched.size(); k++) {
+          Result next = fetchNext();
+          if (next == null) {
+            break;
+          }
+          prefetched.add(next);
+        }
+      }
+
+      if (prefetched.size() < i) {
+        return null;
+      }
+
+      return (prefetched.get(i - 1));
+    }
+
+    public void advanceThruPrefetchedWhileOriginalKeySame(int maxToAdvance, byte[] hutKey) {
+      // TODO: any faster way?
+      for (int i = 0; i < maxToAdvance; i++) {
+        Result res = prefetched.pollFirst();
+        if (res == null) {
+          return;
+        }
+
+        if (!HutRowKeyUtil.sameOriginalKeys(hutKey, res.getRow())) {
+          // stop and put back the element
+          prefetched.addFirst(res);
+          return;
+        }
+      }
     }
   }
 
@@ -291,7 +366,7 @@ public class HutResultScanner implements ResultScanner {
 
     private class IteratorImpl implements Iterator<Result> {
       private byte[] firstRecordKey;
-      private Result next; // next record prepared (and processed) for fetching
+      private Result next; // next record prepared for fetching
       private Result lastRead;
       boolean exhausted;
 
@@ -303,7 +378,7 @@ public class HutResultScanner implements ResultScanner {
           // skipping records that are stored before processing result
           while (HutRowKeyUtil.sameRecords(first.getRow(), nextToFirst.getRow())) {
             next = nextToFirst;
-            nextToFirst = fetchNext();
+            nextToFirst = resultsAccessor.next();
             if (nextToFirst == null) {
               return;
             }
@@ -329,35 +404,37 @@ public class HutResultScanner implements ResultScanner {
           return true;
         }
         try {
-          Result nextCandidate = nonConsumed != null ? nonConsumed : fetchNext();
+          Result nextCandidate = nonConsumed != null ? nonConsumed : resultsAccessor.next();
           if (nextCandidate == null) {
             exhausted = true;
             return false;
           }
 
           // TODO: nextCandidate.getRow() reads all fields (HBase internal implementation), but we actually may need only row here
-          boolean sameOriginalKeys = isMergeNeeded(firstRecordKey, nextCandidate.getRow());
+          boolean mergeNeeded = isMergeNeeded(firstRecordKey, nextCandidate.getRow());
 
-          if (!sameOriginalKeys) {
+          if (!mergeNeeded) {
             nonConsumed = nextCandidate;
             exhausted = true;
             return false;
           }
 
-          // Skipping those which where already processed but hasn't been deleted yet to keep results consistent.
-          // There's tiny chance for that: may occur writing processed interval's data
+          // Skipping those which where already processed but hasn't
+          // been deleted yet to keep results consistent.
+          // There's tiny chance for that: may occur because writing processed interval's data
           // and deleting all processed records in the interval is not atomic.
-          // Also allows not to delete records at all during compaction (in case we want and able to process them more than once).
-          while (lastRead != null && sameOriginalKeys && !HutRowKeyUtil.isAfter(nextCandidate.getRow(), lastRead.getRow())) {
-            nextCandidate = fetchNext();
+          // Also allows not to delete records at all during compaction
+          // (in case we want and able to process them more than once).
+          while (lastRead != null && mergeNeeded && !HutRowKeyUtil.isAfter(nextCandidate.getRow(), lastRead.getRow())) {
+            nextCandidate = resultsAccessor.next();
             if (nextCandidate == null) {
               exhausted = true;
               return false;
             }
-            sameOriginalKeys = isMergeNeeded(firstRecordKey, nextCandidate.getRow());
+            mergeNeeded = isMergeNeeded(firstRecordKey, nextCandidate.getRow());
           }
 
-          if (!sameOriginalKeys) {
+          if (!mergeNeeded) {
             nonConsumed = nextCandidate;
             exhausted = true;
             return false;
@@ -368,14 +445,14 @@ public class HutResultScanner implements ResultScanner {
 
           // Skipping those which were processed but haven't deleted yet (very small chance to face this)
           // skipping records that are stored before processing result
-          Result afterNextCandidate = fetchNext();
+          Result afterNextCandidate = resultsAccessor.next();
           if (afterNextCandidate == null) {
             return true;
           }
 
           while (HutRowKeyUtil.sameRecords(nextCandidate.getRow(), afterNextCandidate.getRow())) {
             next = afterNextCandidate;
-            afterNextCandidate = fetchNext();
+            afterNextCandidate = resultsAccessor.next();
             if (afterNextCandidate == null) {
               return true;
             }

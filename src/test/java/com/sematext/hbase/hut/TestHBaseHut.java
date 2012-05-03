@@ -192,11 +192,11 @@ public class TestHBaseHut {
     recordSale(hTable, FORD, 22);
     recordSale(hTable, CHRYSLER, 110);
 
-    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
-    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {22, 18});
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[]{110, 115, 120, 100, 90});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[]{22, 18});
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable,  CHRYSLER, new int[] {110, 115, 120, 100, 90});
-    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {22, 18});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[]{110, 115, 120, 100, 90});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[]{22, 18});
 
     recordSale(hTable, CHRYSLER, 105);
     recordSale(hTable, FORD, 24);
@@ -206,11 +206,11 @@ public class TestHBaseHut {
     recordSale(hTable, FORD, 40);
     recordSale(hTable, CHRYSLER, 113);
 
-    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[] {113, 107, 105, 110, 115});
-    verifyLastSalesWithCompation(hTable, processor, FORD, new int[] {40, 32, 28, 24, 22});
+    verifyLastSalesWithCompation(hTable, processor, CHRYSLER, new int[]{113, 107, 105, 110, 115});
+    verifyLastSalesWithCompation(hTable, processor, FORD, new int[]{40, 32, 28, 24, 22});
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {113, 107, 105, 110, 115});
-    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {40, 32, 28, 24, 22});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[]{113, 107, 105, 110, 115});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[]{40, 32, 28, 24, 22});
 
     hTable.close();
   }
@@ -230,8 +230,8 @@ public class TestHBaseHut {
 
     UpdatesProcessingUtil.processUpdates(hTable, processor);
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {110, 115, 120, 100, 90});
-    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {22, 18});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[]{110, 115, 120, 100, 90});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[]{22, 18});
 
     recordSale(hTable, CHRYSLER, 105);
     recordSale(hTable, FORD, 24);
@@ -244,8 +244,8 @@ public class TestHBaseHut {
     UpdatesProcessingUtil.processUpdates(hTable, processor);
     UpdatesProcessingUtil.processUpdates(hTable, processor); // updates processing can be performed when no new data was added
     // after processed updates has been stored, "native" HBase scanner should return processed results too
-    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[] {113, 107, 105, 110, 115});
-    verifyLastSalesWithNativeScanner(hTable, FORD, new int[] {40, 32, 28, 24, 22});
+    verifyLastSalesWithNativeScanner(hTable, CHRYSLER, new int[]{113, 107, 105, 110, 115});
+    verifyLastSalesWithNativeScanner(hTable, FORD, new int[]{40, 32, 28, 24, 22});
 
     hTable.close();
   }
@@ -266,17 +266,63 @@ public class TestHBaseHut {
     recordSale(hTable, CHRYSLER, 110);
 
     performUpdatesProcessingButWithoutDeletionOfProcessedRecords(hTable, processor);
-    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, CHRYSLER, new int[]{110, 115, 120, 100, 90});
     verifyLastSales(hTable, processor, FORD, new int[] {22, 18});
 
     recordSale(hTable, CHRYSLER, 105);
     recordSale(hTable, FORD, 24);
 
     performUpdatesProcessingButWithoutDeletionOfProcessedRecords(hTable, processor);
-    verifyLastSales(hTable, processor, CHRYSLER, new int[] {105, 110, 115, 120, 100});
-    verifyLastSales(hTable, processor, FORD, new int[] {24, 22, 18});
+    verifyLastSales(hTable, processor, CHRYSLER, new int[]{105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[]{24, 22, 18});
 
     hTable.close();
+  }
+
+  // TODO: add test for writing with simple scan as apposed to MR job
+  @Test
+  public void testMinRecordsToCompact() throws IOException, InterruptedException, ClassNotFoundException {
+    StockSaleUpdateProcessor processor = new StockSaleUpdateProcessor();
+
+    // Writing data
+    recordSale(hTable, CHRYSLER, 90);
+    recordSale(hTable, CHRYSLER, 100);
+    recordSale(hTable, FORD, 18);
+    recordSale(hTable, CHRYSLER, 120);
+    recordSale(hTable, CHRYSLER, 115);
+    recordSale(hTable, FORD, 22);
+    recordSale(hTable, CHRYSLER, 110);
+    recordSale(hTable, TOYOTA, 2);
+
+    processUpdatesWithMrJob(1000, 2 * 1024 * 1024, 3);
+
+    // 4 is 2 non-compacted FORD records + 1 compacted CHRYSLER + 1 TOYOTA
+    assertRecordsCount(hTable, 4);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[] {110, 115, 120, 100, 90});
+    verifyLastSales(hTable, processor, FORD, new int[]{22, 18});
+
+    recordSale(hTable, TOYOTA, 5);
+    recordSale(hTable, CHRYSLER, 105);
+    recordSale(hTable, FORD, 24);
+
+    processUpdatesWithMrJob(1000, 2 * 1024 * 1024, 3);
+
+    // 5 is 2 non-compacted TOYOTA records + 2 non-compacted CHRYSLER + 1 compacted FORD
+    assertRecordsCount(hTable, 5);
+    verifyLastSales(hTable, processor, CHRYSLER, new int[]{105, 110, 115, 120, 100});
+    verifyLastSales(hTable, processor, FORD, new int[]{24, 22, 18});
+
+    hTable.close();
+  }
+
+  private void assertRecordsCount(HTable hTable, int count) throws IOException {
+    ResultScanner rs = hTable.getScanner(new Scan());
+    int actualCount = 0;
+    for (Result r : rs) {
+      actualCount++;
+    }
+
+    Assert.assertEquals("Records count check", count, actualCount);
   }
 
   // TODO: add more test-cases for MR job
@@ -327,11 +373,16 @@ public class TestHBaseHut {
   }
 
   private void processUpdatesWithMrJob(int mapBufferSize, long mapBufferSizeInBytes) throws IOException, InterruptedException, ClassNotFoundException {
+    processUpdatesWithMrJob(mapBufferSize, mapBufferSizeInBytes, 2);
+  }
+
+  private void processUpdatesWithMrJob(int mapBufferSize, long mapBufferSizeInBytes, int minRecordsToCompact) throws IOException, InterruptedException, ClassNotFoundException {
     System.out.println(DebugUtil.getContentAsText(hTable));
 
     Configuration configuration = testingUtility.getConfiguration();
     configuration.set("hut.mr.buffer.size", String.valueOf(mapBufferSize));
     configuration.set("hut.mr.buffer.size.bytes", String.valueOf(mapBufferSizeInBytes));
+    configuration.set("hut.processor.minRecordsToCompact", String.valueOf(minRecordsToCompact));
     Job job = new Job(configuration);
     UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
 
