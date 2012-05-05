@@ -50,6 +50,7 @@ public final class UpdatesProcessingMrJob {
     public static final String HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR = "hut.mr.buffer.size.bytes";
     public static final String HUT_PROCESSOR_CLASS_ATTR = "hut.processor.class";
     public static final String HUT_PROCESSOR_TSMOD_ATTR = "hut.processor.tsMod";
+    public static final String HUT_PROCESSOR_MIN_RECORDS_TO_COMPACT_ATTR = "hut.processor.minRecordsToCompact";
     private static final Log LOG = LogFactory.getLog(UpdatesProcessingMapper.class);
 
     // buffer for items read by map()
@@ -61,7 +62,12 @@ public final class UpdatesProcessingMrJob {
     private int bufferMaxSizeInBytes = 32 * 1024 * 1024; // 32 MB
 
     // TODO: describe
-    private long tsMod = 0; // can be overridden by HUT_PROCESSOR_TSMOD_ATTR attribute in configuration
+    // can be overridden by HUT_PROCESSOR_TSMOD_ATTR attribute in configuration
+    private long tsMod = 0;
+
+    // TODO: describe
+    // can be overridden by HUT_PROCESSOR_MIN_RECORDS_TO_COMPACT_ATTR attribute in configuration
+    private int minRecordsToCompact = 2;
 
     // queue with map input records to be fed into updates processor
     private LinkedList<Result> mapInputBuff;
@@ -298,9 +304,19 @@ public final class UpdatesProcessingMrJob {
         LOG.info("Using tsMod: " + tsMod);
       }
 
+      String minRecordsToCompactValue =  context.getConfiguration().get(HUT_PROCESSOR_MIN_RECORDS_TO_COMPACT_ATTR);
+      if (minRecordsToCompactValue == null) {
+        LOG.info(HUT_PROCESSOR_MIN_RECORDS_TO_COMPACT_ATTR +
+                " is missed in the configuration, using default value: " + minRecordsToCompact);
+      } else {
+        minRecordsToCompact = Integer.valueOf(minRecordsToCompactValue);
+        LOG.info("Using minRecordsToCompact: " + minRecordsToCompact);
+      }
+
       mapInputBuff = new LinkedList<Result>();
       bytesInBuffer = 0;
       resultScanner = new DetachedHutResultScanner(updateProcessor);
+      resultScanner.setMinRecordsToProcess(minRecordsToCompact);
       failed = false;
     }
 
