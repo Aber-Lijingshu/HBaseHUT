@@ -81,7 +81,9 @@ public class TestHBaseHut {
       if (lastIndex == -1) { // nothing to output
         return;
       }
-      for (int i = 0; i < 5; i++) {
+
+      // writing fields backwards (non in alphabetical order) intentionally: test for one of the fixes
+      for (int i = 4; i >= 0; i--) {
         // iterating backwards so that "lastPrice0" is set to the most recent one
         int index = (lastIndex + 5 - i) % 5;
         byte[] price = lastPricesBuff[index];

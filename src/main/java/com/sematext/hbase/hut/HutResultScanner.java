@@ -300,6 +300,8 @@ public class HutResultScanner implements ResultScanner {
     }
 
     public Result getResult() {
+      // Result object relies on kvs to be sorted
+      Arrays.sort(kvs, KeyValue.COMPARATOR);
       return new Result(kvs);
     }
   }
