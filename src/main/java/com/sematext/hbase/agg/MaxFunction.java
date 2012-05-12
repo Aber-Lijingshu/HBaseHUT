@@ -6,7 +6,7 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
 
 // NOTE: This is just stub implementation. Relies on data to be of type double.
-public class MaxFunction implements UpdateProcessor {
+public class MaxFunction extends UpdateProcessor {
   private byte[] colfam;
   private byte[] qual;
 
