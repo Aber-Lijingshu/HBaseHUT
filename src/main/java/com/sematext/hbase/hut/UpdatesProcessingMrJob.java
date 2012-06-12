@@ -15,6 +15,10 @@
  */
 package com.sematext.hbase.hut;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.LinkedList;
 
@@ -31,6 +35,7 @@ import org.apache.hadoop.hbase.mapreduce.HRegionPartitioner;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapper;
 import org.apache.hadoop.hbase.mapreduce.TableReducer;
+import org.apache.hadoop.hbase.util.Base64;
 import org.apache.hadoop.mapreduce.Job;
 
 /**
@@ -49,6 +54,7 @@ public final class UpdatesProcessingMrJob {
     public static final String HUT_MR_BUFFER_SIZE_ATTR = "hut.mr.buffer.size";
     public static final String HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR = "hut.mr.buffer.size.bytes";
     public static final String HUT_PROCESSOR_CLASS_ATTR = "hut.processor.class";
+    public static final String HUT_PROCESSOR_DETAILS_ATTR = "hut.processor.details";
     public static final String HUT_PROCESSOR_TSMOD_ATTR = "hut.processor.tsMod";
     public static final String HUT_PROCESSOR_MIN_RECORDS_TO_COMPACT_ATTR = "hut.processor.minRecordsToCompact";
     private static final Log LOG = LogFactory.getLog(UpdatesProcessingMapper.class);
@@ -269,8 +275,15 @@ public final class UpdatesProcessingMrJob {
       if (updatesProcessorClass == null) {
         throw new IllegalStateException("hut.processor.class missed in the configuration");
       }
-      final UpdateProcessor updateProcessor = createInstance(updatesProcessorClass, UpdateProcessor.class);
-      LOG.info("Using updateProcessor: " + updateProcessor.getClass());
+
+      String updatesProcessorDetails =  context.getConfiguration().get(HUT_PROCESSOR_DETAILS_ATTR);
+      if (updatesProcessorDetails == null) {
+        // TODO: throw exception in future versions
+        LOG.warn("hut.processor.details missed in the configuration, updates processor serialized state is missing");
+      }
+
+      UpdateProcessor updateProcessor = convertStringToUpdateProcessor(updatesProcessorClass, updatesProcessorDetails);
+      LOG.info("Using updateProcessor: " + updateProcessor.toString());
 
       if (updateProcessor instanceof Configurable) {
         ((Configurable) updateProcessor).configure(context.getConfiguration());
@@ -350,20 +363,6 @@ public final class UpdatesProcessingMrJob {
       
       super.cleanup(context);
     }
-
-    @SuppressWarnings ({"unchecked", "unused"})
-    private static <T>T createInstance(String className, Class<T> clazz) {
-      try {
-        Class c = Class.forName(className);
-        return (T) c.newInstance();
-      } catch (InstantiationException e) {
-        throw new RuntimeException("Could not create class instance.", e);
-      } catch (IllegalAccessException e) {
-        throw new RuntimeException("Could not create class instance.", e);
-      } catch (ClassNotFoundException e) {
-        throw new RuntimeException("Could not create class instance.", e);
-      }
-    }
   }
 
   public static class UpdatesProcessingReducer
@@ -414,19 +413,69 @@ public final class UpdatesProcessingMrJob {
    *
    * @param table  The table name.
    * @param scan  The scan with the columns to scan.
-   * @param updateProcessorClass update processor implemenation
+   * @param up update processor implementation
    * @param job  The job configuration.
    * @throws java.io.IOException When setting up the job fails.
    */
   @SuppressWarnings("unchecked")
-  public static void initJob(String table, Scan scan, Class<? extends UpdateProcessor> updateProcessorClass, Job job)
+  public static void initJob(String table, Scan scan, UpdateProcessor up, Job job)
           throws IOException {
     TableMapReduceUtil.initTableMapperJob(table, scan, UpdatesProcessingMapper.class,
       ImmutableBytesWritable.class, Put.class, job);
     TableMapReduceUtil.initTableReducerJob(table, UpdatesProcessingReducer.class, job, HRegionPartitioner.class);
     job.setJarByClass(UpdatesProcessingMrJob.class);
     job.getConfiguration().set(UpdatesProcessingReducer.HTABLE_ATTR_NAME, table);
-    job.getConfiguration().set(UpdatesProcessingMapper.HUT_PROCESSOR_CLASS_ATTR, updateProcessorClass.getName());
+
+    job.getConfiguration().set(UpdatesProcessingMapper.HUT_PROCESSOR_CLASS_ATTR, up.getClass().getName());
+    job.getConfiguration().set(UpdatesProcessingMapper.HUT_PROCESSOR_DETAILS_ATTR, convertUpdateProcessorToString(up));
+
     job.getConfiguration().set("mapred.map.tasks.speculative.execution", "false"); // TODO: explain
+  }
+
+  /**
+   * Writes the given updatesProcessor into a Base64 encoded string.
+   *
+   * @param up  The updatesProcessor to write out.
+   * @return The updateProcessor saved in a Base64 encoded string.
+   * @throws IOException When writing the updateProcessor fails.
+   */
+  static String convertUpdateProcessorToString(UpdateProcessor up) throws IOException {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    DataOutputStream dos = new DataOutputStream(out);
+    up.write(dos);
+    return Base64.encodeBytes(out.toByteArray());
+  }
+
+  /**
+   * Converts the given Base64 string back into a UpdateProcessor instance.
+   *
+   * @param upClassName  The updateProcessor class name.
+   * @param base64  The updateProcessor details.
+   * @return The newly created updateProcessor instance.
+   * @throws IOException When reading the updateProcessor instance fails.
+   */
+  static UpdateProcessor convertStringToUpdateProcessor(String upClassName, String base64)
+          throws IOException {
+    UpdateProcessor up = createInstance(upClassName, UpdateProcessor.class);
+    if (base64 != null) {
+      ByteArrayInputStream bis = new ByteArrayInputStream(Base64.decode(base64));
+      DataInputStream dis = new DataInputStream(bis);
+      up.readFields(dis);
+    }
+    return up;
+  }
+
+  @SuppressWarnings ({"unchecked", "unused"})
+  private static <T>T createInstance(String className, Class<T> clazz) {
+    try {
+      Class c = Class.forName(className);
+      return (T) c.newInstance();
+    } catch (InstantiationException e) {
+      throw new RuntimeException("Could not create class instance.", e);
+    } catch (IllegalAccessException e) {
+      throw new RuntimeException("Could not create class instance.", e);
+    } catch (ClassNotFoundException e) {
+      throw new RuntimeException("Could not create class instance.", e);
+    }
   }
 }

@@ -378,15 +378,23 @@ public class TestHBaseHut {
     processUpdatesWithMrJob(mapBufferSize, mapBufferSizeInBytes, 2);
   }
 
-  private void processUpdatesWithMrJob(int mapBufferSize, long mapBufferSizeInBytes, int minRecordsToCompact) throws IOException, InterruptedException, ClassNotFoundException {
+  private void processUpdatesWithMrJob(int mapBufferSize, long mapBufferSizeInBytes, int minRecordsToCompact)
+          throws IOException, InterruptedException, ClassNotFoundException {
+    processUpdatesWithMrJob(testingUtility.getConfiguration(), hTable,
+            mapBufferSize, mapBufferSizeInBytes, minRecordsToCompact, new StockSaleUpdateProcessor());
+  }
+
+  public static void processUpdatesWithMrJob(Configuration configuration, HTable hTable,
+          int mapBufferSize, long mapBufferSizeInBytes, int minRecordsToCompact,
+          UpdateProcessor up) throws IOException, InterruptedException, ClassNotFoundException {
+
     System.out.println(DebugUtil.getContentAsText(hTable));
 
-    Configuration configuration = testingUtility.getConfiguration();
     configuration.set("hut.mr.buffer.size", String.valueOf(mapBufferSize));
     configuration.set("hut.mr.buffer.size.bytes", String.valueOf(mapBufferSizeInBytes));
     configuration.set("hut.processor.minRecordsToCompact", String.valueOf(minRecordsToCompact));
     Job job = new Job(configuration);
-    UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
+    UpdatesProcessingMrJob.initJob(Bytes.toString(hTable.getTableName()), new Scan(), up, job);
 
     boolean success = job.waitForCompletion(true);
     Assert.assertTrue(success);
@@ -443,7 +451,7 @@ public class TestHBaseHut {
       configuration.set("hut.mr.buffer.size", String.valueOf(10));
       configuration.set("hut.processor.tsMod", String.valueOf(300));
       Job job = new Job(configuration);
-      UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), StockSaleUpdateProcessor.class, job);
+      UpdatesProcessingMrJob.initJob(TABLE_NAME, new Scan(), new StockSaleUpdateProcessor(), job);
 
       boolean success = job.waitForCompletion(true);
       Assert.assertTrue(success);
