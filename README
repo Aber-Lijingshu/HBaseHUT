@@ -42,6 +42,8 @@ http://blog.sematext.com/2010/12/16/deferring-processing-updates-to-increase-hba
 http://blog.sematext.com/2012/04/22/hbase-real-time-analytics-rollbacks-via-append-based-updates/
 http://blog.sematext.com/2012/04/27/hbase-real-time-analytics-rollbacks-via-append-based-updates-part-2/
 http://vimeo.com/26813019
+http://www.slideshare.net/alexbaranau/realtime-analytics-with-hbase-short-version
+http://www.slideshare.net/alexbaranau/realtime-analytics-with-hbase-long-version
 
 Build Notes:
 ------------
