@@ -44,14 +44,12 @@ public class TestHBaseHut {
   private static final byte[] CHRYSLER = Bytes.toBytes("chrysler");
   private static final byte[] FORD = Bytes.toBytes("ford");
   private static final byte[] TOYOTA = Bytes.toBytes("toyota");
-  private HBaseTestingUtility testingUtility;
+  private HBaseTestingUtility testingUtility = new HBaseTestingUtility();
   private HTable hTable;
 
   @Before
   public void before() throws Exception {
-    testingUtility = new HBaseTestingUtility();
-    testingUtility.startMiniZKCluster();
-    testingUtility.startMiniCluster(1);
+    testingUtility.startMiniCluster();
     hTable = testingUtility.createTable(Bytes.toBytes(TABLE_NAME), SALE_CF);
   }
 
@@ -59,12 +57,11 @@ public class TestHBaseHut {
   public void after() throws Exception {
     hTable = null;
     testingUtility.shutdownMiniCluster();
-    testingUtility.shutdownMiniZKCluster();
     testingUtility = null;
   }
 
   // Stores only last 5 stock prices
-  static class StockSaleUpdateProcessor extends UpdateProcessor {
+  public static class StockSaleUpdateProcessor extends UpdateProcessor {
     @Override
     public void process(Iterable<Result> records, UpdateProcessingResult processingResult) {
       // Processing records

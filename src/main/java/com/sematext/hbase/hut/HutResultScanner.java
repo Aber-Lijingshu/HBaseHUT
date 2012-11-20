@@ -35,6 +35,8 @@ import java.util.List;
  * Use it when scanning records written as {@link com.sematext.hbase.hut.HutPut}s
  * TODO: needs refactoring: extract base class ResultScanner "wrapper" independent on the actual data source
  */
+// TODO: refactor to accept arbitrary {@link Result}s provider (currently
+//       inheritance used to override default source)
 public class HutResultScanner implements ResultScanner {
   private final ResultScanner resultScanner;
   private final ResultsAccessor resultsAccessor;
@@ -67,7 +69,7 @@ public class HutResultScanner implements ResultScanner {
     this.minRecordsToProcess = minRecordsToProcess;
   }
 
-  void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
+  protected void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
     if (resultScanner == null) {
       throw new IllegalArgumentException("ResultScanner should NOT be null.");
     }
@@ -147,7 +149,7 @@ public class HutResultScanner implements ResultScanner {
     return HutRowKeyUtil.sameOriginalKeys(firstKey, secondKey);
   }
 
-  Result fetchNext() throws IOException {
+  protected Result fetchNext() throws IOException {
     return resultScanner.next(); // TODO: make sure caching is used to reduce RPC requests number
   }
 
@@ -216,7 +218,9 @@ public class HutResultScanner implements ResultScanner {
 
   @Override
   public void close() {
-    resultScanner.close();
+    if (resultScanner != null) {
+      resultScanner.close();
+    }
   }
 
   static class UpdateProcessingResultImpl implements UpdateProcessingResult {

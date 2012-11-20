@@ -14,7 +14,7 @@ discussions on HBase mailing lists around the problem with having Get&Put
 for each update operation, which affects write throughput dramatically.
 Another force behind behind the approach used in HBaseHUT was recent
 activity on Coprocessors development.  Although usage of CPs is very limited
-in the current implementation (see CPs branch) HBaseHUT is designed with
+in the current implementation (see cp package) HBaseHUT is designed with
 broader use of CPs in mind because they add more
 flexibility when it comes to alternative MapReduce data processing
 approaches in addition to allowing seamlessly integrate the logic in places
@@ -47,18 +47,16 @@ http://www.slideshare.net/alexbaranau/realtime-analytics-with-hbase-long-version
 
 Build Notes:
 ------------
-Current pom configured to build against HBase 0.90.4 (cdh3u3). The project
+Current pom configured to build against HBase 0.92.1 (cdh4). The project
 start date goes back to the time when 0.89.20100924 was the latest version
 available. The code should be compatible with it too (and any version after it).
-CPs branch is configured to be run on HBase 0.92.xx (first CPs-capable release).
 
 Note: unit-tests take some time to execute (up to several minutes), to skip
 their execution use -Dmaven.skip.tests=true.
 
 HBase Version Compatibility:
 ----------------------------
-Compatible with HBase 0.20.5 - 0.92.xxx
-May be compatible with older: tests needed (TODO)
+Compatible with HBase 0.92.xxx+
 
 Released under Apache License 2.0.
 
