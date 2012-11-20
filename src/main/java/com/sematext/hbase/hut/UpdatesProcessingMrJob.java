@@ -20,7 +20,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -31,26 +33,25 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
-import org.apache.hadoop.hbase.mapreduce.HRegionPartitioner;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapper;
-import org.apache.hadoop.hbase.mapreduce.TableReducer;
 import org.apache.hadoop.hbase.util.Base64;
 import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.output.NullOutputFormat;
 
 /**
- * Perform processing updates by running MapReduce job, and hence utilizes data locality during work (to some extend).
- * TODO: Think over implementing map-only job for doing compaction. Which
- * should work much faster. Map-only job
- * may cause some spans of records to be compacted into multiple result
- * records, which is usually (always?) ok. Multiple updates processing
- * results records should be supported already. One concern is about writing
- * into same table from a Mapper which may cause issues.
+ * Perform processing updates by running MapReduce job, and hence utilizes data locality during work.
+ * This is a map-only job for doing compaction which means greater utilization of data locality
+ * (when reading and writing data), but may cause issues according to some sources (concern is about 
+ * writing into same table from a Mapper which may cause issues TODO: really?)
+ * NOTE: it may cause some spans of records to be compacted into multiple result
+ * records, which is usually (always?) ok.
  */
 public final class UpdatesProcessingMrJob {
   private UpdatesProcessingMrJob() {}
 
   public static class UpdatesProcessingMapper extends TableMapper<ImmutableBytesWritable, Put> {
+    public static final String HTABLE_NAME_ATTR = "htable.name";
     public static final String HUT_MR_BUFFER_SIZE_ATTR = "hut.mr.buffer.size";
     public static final String HUT_MR_BUFFER_SIZE_IN_BYTES_ATTR = "hut.mr.buffer.size.bytes";
     public static final String HUT_PROCESSOR_CLASS_ATTR = "hut.processor.class";
@@ -58,6 +59,8 @@ public final class UpdatesProcessingMrJob {
     public static final String HUT_PROCESSOR_TSMOD_ATTR = "hut.processor.tsMod";
     public static final String HUT_PROCESSOR_MIN_RECORDS_TO_COMPACT_ATTR = "hut.processor.minRecordsToCompact";
     private static final Log LOG = LogFactory.getLog(UpdatesProcessingMapper.class);
+
+    private HTable hTable;
 
     // buffer for items read by map()
     // can be overridden by HUT_MR_BUFFER_SIZE_ATTR attribute in configuration
@@ -82,9 +85,14 @@ public final class UpdatesProcessingMrJob {
     private DetachedHutResultScanner resultScanner;
     // used to keep last processed update when buffer was emptied (before filled again) - see more comments in the code
     private Put readyToStoreButWaitingFurtherMerging = null;
+    private List<byte[]> readyToDelete = new ArrayList<byte[]>();
 
     // map task state
     private volatile boolean failed;
+
+    // map task counters
+    private int writtenRecords = 0;
+    private int deletedRecords = 0;
 
     /**
      * Detached from HTable and ResultScanner scanner that is being fed with {@link org.apache.hadoop.hbase.client.Result} items.
@@ -92,6 +100,7 @@ public final class UpdatesProcessingMrJob {
      */
     class DetachedHutResultScanner extends HutResultScanner {
       private Put processedUpdatesToStore = null;
+      private List<byte[]> rowsToDelete = new ArrayList<byte[]>();
 
       public DetachedHutResultScanner(UpdateProcessor updateProcessor) {
         super(null, updateProcessor, null, true);
@@ -112,8 +121,8 @@ public final class UpdatesProcessingMrJob {
       }
 
       @Override
-      void deleteProcessedRecords(byte[] firstInclusive, byte[] lastInclusive, byte[] processingResultToLeave) throws IOException {
-        // DO NOTHING
+      void deleteProcessedRecords(List<byte[]> rows) throws IOException {
+        rowsToDelete = rows;
       }
 
       @Override
@@ -127,6 +136,7 @@ public final class UpdatesProcessingMrJob {
       @Override
       public Result next() throws IOException {
         processedUpdatesToStore = null;
+        rowsToDelete.clear();
 
         return super.next();
       }
@@ -138,6 +148,10 @@ public final class UpdatesProcessingMrJob {
       public Put getProcessedUpdatesToStore() {
         return processedUpdatesToStore;
       }
+
+      public List<byte[]> getRowsToDelete() {
+        return rowsToDelete;
+      }
     }
 
     /**
@@ -146,7 +160,7 @@ public final class UpdatesProcessingMrJob {
      * @param key  The current key.
      * @param value  The current value.
      * @param context  The current context.
-     * @throws IOException When writing the record fails.
+     * @throws java.io.IOException When writing the record fails.
      * @throws InterruptedException When the job is aborted.
      */
     public void map(ImmutableBytesWritable key, Result value, Context context) throws IOException, InterruptedException {
@@ -156,12 +170,14 @@ public final class UpdatesProcessingMrJob {
       }
 
       // more or less reasonable: attempt to ping every time when switching to process buffered records
-      pingMap(context); // TODO: allow user control pinging
+      pingMap(context); // TODO: allow user to control pinging
 
+      // processing buffered rows
       try {
         Result res = resultScanner.next();
         Result prev = null;
         Put processingResultToStore = null;
+        List<byte[]> toDeleteAfterStoringProcessingResult = new ArrayList<byte[]>();
         while (res != null) {
           // we save previous record in case processingResultToStore is null and this is the last
           // element in buffer. In that case we will put it back to buffer to give it a chance to merge
@@ -170,16 +186,22 @@ public final class UpdatesProcessingMrJob {
 
           // if merging occurred, it will be stored as processingResultToStore
           processingResultToStore = resultScanner.getProcessedUpdatesToStore();
+          toDeleteAfterStoringProcessingResult.addAll(resultScanner.getRowsToDelete());
 
           // last processing result from previous buffered records
           // got chance to be merged, but looks like next record is from different group (i.e. no merge occurred)
           if (processingResultToStore == null && readyToStoreButWaitingFurtherMerging != null) {
-            emit(context, readyToStoreButWaitingFurtherMerging);
+            store(readyToStoreButWaitingFurtherMerging, readyToDelete);
+            readyToDelete.clear();
           }
           // setting to null in any case:
           // * either it was written above or
           // * was merged with next records and will be written below
           readyToStoreButWaitingFurtherMerging = null;
+          // in case readyToStoreButWaitingFurtherMerging was merged with next records, we need to
+          // "transfer" those records we wanted to delete with it
+          toDeleteAfterStoringProcessingResult.addAll(readyToDelete);
+          readyToDelete.clear();
 
           res = resultScanner.next();
           boolean lastInBuffer = res == null;
@@ -187,7 +209,8 @@ public final class UpdatesProcessingMrJob {
           // instead we postpone storing it to give it a chance to merge with next map input records down the road.
           if (!lastInBuffer) {
             if (processingResultToStore != null) {
-              emit(context, processingResultToStore);
+              store(processingResultToStore, toDeleteAfterStoringProcessingResult);
+              toDeleteAfterStoringProcessingResult.clear();
             }
           }
         }
@@ -197,11 +220,13 @@ public final class UpdatesProcessingMrJob {
           boolean added = addToMapInputBufferIfSpaceAvailable(prev);
 
           if (!added && processingResultToStore != null) {
-            emit(context, processingResultToStore);
+            store(processingResultToStore, toDeleteAfterStoringProcessingResult);
+            toDeleteAfterStoringProcessingResult.clear();
             return;
           }
 
           readyToStoreButWaitingFurtherMerging = processingResultToStore;
+          readyToDelete.addAll(toDeleteAfterStoringProcessingResult);
         }
       } catch (IOException e) {
         LOG.error(e);
@@ -253,8 +278,12 @@ public final class UpdatesProcessingMrJob {
       return mapInputBuff.size() >= bufferMaxSize || bytesInBuffer >= bufferMaxSizeInBytes;
     }
 
-    private void emit(Context context, Put processingResultToStore) throws IOException, InterruptedException {
-      context.write(new ImmutableBytesWritable(processingResultToStore.getRow()), processingResultToStore);
+    private void store(Put processingResultToStore, List<byte[]> rowsToDeleteAfterStoringProcessingResult)
+            throws IOException, InterruptedException {
+      hTable.put(processingResultToStore);
+      writtenRecords++;
+      HutResultScanner.deleteProcessedRecords(hTable, rowsToDeleteAfterStoringProcessingResult);
+      deletedRecords += rowsToDeleteAfterStoringProcessingResult.size();
     }
 
     private long lastPingTimeMap = System.currentTimeMillis();
@@ -326,11 +355,28 @@ public final class UpdatesProcessingMrJob {
         LOG.info("Using minRecordsToCompact: " + minRecordsToCompact);
       }
 
+      // TODO: add validation of configuration attributes
+      String tableName = context.getConfiguration().get(HTABLE_NAME_ATTR);
+      if (tableName == null) {
+        throw new IllegalStateException(HTABLE_NAME_ATTR + " missed in the configuration");
+      }
+      hTable = new HTable(tableName);
+      // NOTE: we are OK with using client-side buffer as losing deletes will not corrupt the data
+      // TODO: make these settings configurable
+      hTable.setAutoFlush(false);
+      // 4MB
+      hTable.setWriteBufferSize(4 * 1024 * 1024);
+
+
       mapInputBuff = new LinkedList<Result>();
       bytesInBuffer = 0;
       resultScanner = new DetachedHutResultScanner(updateProcessor);
       resultScanner.setMinRecordsToProcess(minRecordsToCompact);
       failed = false;
+
+      // map task counters
+      writtenRecords = 0;
+      deletedRecords = 0;
     }
 
     @Override
@@ -339,15 +385,22 @@ public final class UpdatesProcessingMrJob {
         Result res = resultScanner.next();
         while (res != null) {
           Put processingResultToStore = resultScanner.getProcessedUpdatesToStore();
+          List<byte[]> toDeleteAfterStoringProcessingResult = resultScanner.getRowsToDelete();
 
           // last processing result from previous buffered records
           // got chance to be merged, but looks like next record is from different group (i.e. no merge occurred)
           if (processingResultToStore == null && readyToStoreButWaitingFurtherMerging != null) {
-            emit(context, readyToStoreButWaitingFurtherMerging);
+            store(readyToStoreButWaitingFurtherMerging, readyToDelete);
+            readyToDelete.clear();
           }
 
           if (processingResultToStore != null) {
-            emit(context, processingResultToStore);
+            // in case readyToStoreButWaitingFurtherMerging was merged with next records, we need to
+            // "transfer" those records we wanted to delete with it
+            toDeleteAfterStoringProcessingResult.addAll(readyToDelete);
+            readyToDelete.clear();
+            store(processingResultToStore, toDeleteAfterStoringProcessingResult);
+            toDeleteAfterStoringProcessingResult.clear();
           }
           res = resultScanner.next();
         }
@@ -357,53 +410,17 @@ public final class UpdatesProcessingMrJob {
       mapInputBuff.clear();
       bytesInBuffer = 0;
 
+      context.getCounter("hut_compaction", "writtenRecords").increment(writtenRecords);
+      context.getCounter("hut_compaction", "deletedRecords").increment(deletedRecords);
+
+
       if (failed) {
         throw new RuntimeException("Job was marked as failed");
       }
-      
+
+      hTable.close();
+
       super.cleanup(context);
-    }
-  }
-
-  public static class UpdatesProcessingReducer
-  extends TableReducer<ImmutableBytesWritable, Put, ImmutableBytesWritable> {
-    public static final String HTABLE_ATTR_NAME = "htable.name";
-    private HTable hTable;
-
-    @SuppressWarnings("unused")
-    private static final Log LOG = LogFactory.getLog(UpdatesProcessingReducer.class);
-
-    /**
-     * Writes each given record, consisting of the row key and the given values,
-     * to the configured {@link org.apache.hadoop.mapreduce.OutputFormat}. It is emitting the row key and each
-     * {@link org.apache.hadoop.hbase.client.Put Put} or
-     * {@link org.apache.hadoop.hbase.client.Delete Delete} as separate pairs.
-     *
-     * @param key  The current row key.
-     * @param values  The {@link org.apache.hadoop.hbase.client.Put Put} or
-     *   {@link org.apache.hadoop.hbase.client.Delete Delete} list for the given
-     *   row.
-     * @param context  The context of the reduce.
-     * @throws IOException When writing the record fails.
-     * @throws InterruptedException When the job gets interrupted.
-     */
-    @Override
-    public void reduce(ImmutableBytesWritable key, Iterable<Put> values,
-        Context context) throws IOException, InterruptedException {
-      for(Put updatesProcessingResult : values) {
-        byte[] row = key.get();
-        context.write(key, updatesProcessingResult);
-        // TODO: replace htable.delete with writing to context?
-        HTableUtil.deleteRange(hTable,
-                HutRowKeyUtil.getStartRowOfInterval(row), HutRowKeyUtil.getEndRowOfInterval(row), row);
-      }
-    }
-
-    @Override
-    protected void setup(Context context) throws IOException, InterruptedException {
-      super.setup(context);
-      // TODO: add validation of configuration attributes
-      hTable = new HTable(context.getConfiguration().get(HTABLE_ATTR_NAME));
     }
   }
 
@@ -420,12 +437,12 @@ public final class UpdatesProcessingMrJob {
   @SuppressWarnings("unchecked")
   public static void initJob(String table, Scan scan, UpdateProcessor up, Job job)
           throws IOException {
-    TableMapReduceUtil.initTableMapperJob(table, scan, UpdatesProcessingMapper.class,
-      ImmutableBytesWritable.class, Put.class, job);
-    TableMapReduceUtil.initTableReducerJob(table, UpdatesProcessingReducer.class, job, HRegionPartitioner.class);
+    TableMapReduceUtil.initTableMapperJob(table, scan, UpdatesProcessingMapper.class, null, null, job);
     job.setJarByClass(UpdatesProcessingMrJob.class);
-    job.getConfiguration().set(UpdatesProcessingReducer.HTABLE_ATTR_NAME, table);
+    job.setOutputFormatClass(NullOutputFormat.class);
+    job.setNumReduceTasks(0);
 
+    job.getConfiguration().set(UpdatesProcessingMapper.HTABLE_NAME_ATTR, table);
     job.getConfiguration().set(UpdatesProcessingMapper.HUT_PROCESSOR_CLASS_ATTR, up.getClass().getName());
     job.getConfiguration().set(UpdatesProcessingMapper.HUT_PROCESSOR_DETAILS_ATTR, convertUpdateProcessorToString(up));
 
@@ -437,7 +454,7 @@ public final class UpdatesProcessingMrJob {
    *
    * @param up  The updatesProcessor to write out.
    * @return The updateProcessor saved in a Base64 encoded string.
-   * @throws IOException When writing the updateProcessor fails.
+   * @throws java.io.IOException When writing the updateProcessor fails.
    */
   static String convertUpdateProcessorToString(UpdateProcessor up) throws IOException {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -452,7 +469,7 @@ public final class UpdatesProcessingMrJob {
    * @param upClassName  The updateProcessor class name.
    * @param base64  The updateProcessor details.
    * @return The newly created updateProcessor instance.
-   * @throws IOException When reading the updateProcessor instance fails.
+   * @throws java.io.IOException When reading the updateProcessor instance fails.
    */
   static UpdateProcessor convertStringToUpdateProcessor(String upClassName, String base64)
           throws IOException {
