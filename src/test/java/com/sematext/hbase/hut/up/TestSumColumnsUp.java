@@ -55,7 +55,7 @@ public class TestSumColumnsUp {
   }
 
   @After
-  public void after() throws IOException {
+  public void after() throws Exception {
     hTable.close();
     hTable = null;
     testingUtility.shutdownMiniCluster();
