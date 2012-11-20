@@ -32,6 +32,7 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * General unit-test for the whole concept
@@ -55,7 +56,7 @@ public class TestHBaseHut {
   }
 
   @After
-  public void after() throws IOException {
+  public void after() throws Exception {
     hTable = null;
     testingUtility.shutdownMiniCluster();
     testingUtility.shutdownMiniZKCluster();
@@ -388,6 +389,7 @@ public class TestHBaseHut {
           int mapBufferSize, long mapBufferSizeInBytes, int minRecordsToCompact,
           UpdateProcessor up) throws IOException, InterruptedException, ClassNotFoundException {
 
+    System.out.println("Table contents BEFORE processing with MR job:");
     System.out.println(DebugUtil.getContentAsText(hTable));
 
     configuration.set("hut.mr.buffer.size", String.valueOf(mapBufferSize));
@@ -399,6 +401,7 @@ public class TestHBaseHut {
     boolean success = job.waitForCompletion(true);
     Assert.assertTrue(success);
 
+    System.out.println("Table contents AFTER processing with MR job:");
     System.out.println(DebugUtil.getContentAsText(hTable));
   }
 
@@ -686,7 +689,7 @@ public class TestHBaseHut {
     ResultScanner resultScanner =
             new HutResultScanner(hTable.getScanner(new Scan()), updateProcessor, hTable, true) {
               @Override
-              void deleteProcessedRecords(byte[] firstInclusive, byte[] lastInclusive, byte[] processingResultToLeave) throws IOException {
+              void deleteProcessedRecords(List<byte[]> rows) throws IOException {
               }
             };
     while (resultScanner.next() != null) {

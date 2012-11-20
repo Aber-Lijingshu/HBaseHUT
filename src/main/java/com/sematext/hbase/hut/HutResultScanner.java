@@ -16,6 +16,7 @@
 package com.sematext.hbase.hut;
 
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
@@ -27,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 
 /**
  * HBaseHUT {@link org.apache.hadoop.hbase.client.ResultScanner} implementation.
@@ -110,18 +112,15 @@ public class HutResultScanner implements ResultScanner {
     // TODO: allow decide to skip merging at processing time
 
     Result result;
-    // hook for fastforwarding thru records with particular original key in case no need to merge them
+    // hook for fast-forwarding thru records with particular original key in case no need to merge them
     // TODO: modify API of processor to return true/false instead of extra method?
     // TODO: adjust API of updateProcessor.isMergeNeeded method (add offset/length params) to avoid creating extra objects
-    if (updateProcessor.isMergeNeeded(HutRowKeyUtil.getOriginalKey(firstResult.getRow()))) {
+    boolean isMergeNeeded = updateProcessor.isMergeNeeded(HutRowKeyUtil.getOriginalKey(firstResult.getRow()));
+    if (isMergeNeeded) {
       processingResult.init(firstResult.getRow());
       updateProcessor.process(iterableRecords, processingResult);
 
       result = processingResult.getResult();
-      // TODO: handle empty processing result better, code refactoring needed
-      if (storeProcessedUpdates && !processingResult.isEmpty()) {
-        storeProcessedUpdates(result, iterableRecords.iterator.lastRead);
-      }
     } else {
       // actually this should be ignored, as the hook for skipping processing is for compaction job only
       result = firstResult;
@@ -131,6 +130,13 @@ public class HutResultScanner implements ResultScanner {
     // Reading records of this group to the end
     while (iterableRecords.iterator.hasNext()) {
       iterableRecords.iterator.next();
+    }
+
+    if (isMergeNeeded && storeProcessedUpdates) {
+      // TODO: handle empty processing result better, code refactoring needed
+      if (!processingResult.isEmpty()) {
+        storeProcessedUpdates(result, iterableRecords.iterator.lastRead, iterableRecords.getFetchedRowKeys());
+      }
     }
 
     // TODO: if result is empty we should not return it, but rather fetch next
@@ -357,6 +363,9 @@ public class HutResultScanner implements ResultScanner {
     // reusing iterator instance
     private IteratorImpl iterator = new IteratorImpl();
 
+    // retrieved rows
+    private List<byte[]> fetchedRowKeys = new ArrayList<byte[]>();
+
     // Accepts at least two records: no point in starting processing unless we have more than one
     public void init(Result first, Result nextToFirst) {
       this.iterator.firstRecordKey = first.getRow();
@@ -364,6 +373,11 @@ public class HutResultScanner implements ResultScanner {
       this.iterator.exhausted = false;
       this.iterator.lastRead = null;
       this.iterator.doFirstHasNext(first, nextToFirst);
+      this.fetchedRowKeys.clear();
+    }
+
+    public List<byte[]> getFetchedRowKeys() {
+      return fetchedRowKeys;
     }
 
     private class IteratorImpl implements Iterator<Result> {
@@ -482,6 +496,8 @@ public class HutResultScanner implements ResultScanner {
         // we use a temporary variable.
         lastRead = next;
         next = null;
+        fetchedRowKeys.add(lastRead.getRow());
+
         return lastRead;
       }
 
@@ -497,16 +513,15 @@ public class HutResultScanner implements ResultScanner {
     }
   }
 
-  private void storeProcessedUpdates(Result processingResult, Result last) throws IOException {
+  private void storeProcessedUpdates(Result processingResult, Result last,
+                                     List<byte[]> rowsInBetweenInclusive) throws IOException {
     // processing result was stored in the first record of the processed interval,
     // hence we can utilize its write time as start time for the compressed interval
     byte[] firstRow = processingResult.getRow();
     byte[] lastRow = last.getRow();
     Put put = createPutWithProcessedResult(processingResult, firstRow, lastRow);
-
-
     store(put);
-    deleteProcessedRecords(processingResult.getRow(), lastRow, put.getRow());
+    deleteProcessedRecords(rowsInBetweenInclusive);
   }
 
   // TODO: move this method out of this class? (looks like utility method)
@@ -535,6 +550,10 @@ public class HutResultScanner implements ResultScanner {
     hTable.put(put);
   }
 
+  void deleteProcessedRecords(List<byte[]> rowsInBetweenInclusive) throws IOException {
+    deleteProcessedRecords(hTable, rowsInBetweenInclusive);
+  }
+
   // NOTE: this works only when rows has the same length, and doesn't invalidate row cache
   static void overrideRow(KeyValue kv, byte[] row) {
     // TODO: Does it makes sense to check if there's need for overriding first? Will it be more efficient?
@@ -542,8 +561,18 @@ public class HutResultScanner implements ResultScanner {
 
   }
 
-  void deleteProcessedRecords(byte[] firstInclusive, byte[] lastInclusive, byte[] processingResultToLeave) throws IOException {
-    HTableUtil.deleteRange(hTable, firstInclusive, lastInclusive, processingResultToLeave);
+  public static void deleteProcessedRecords(HTable hTable, List<byte[]> rowsToDelete) throws IOException {
+    long now = System.currentTimeMillis();
+    List<Delete> deletes = new ArrayList<Delete>();
+    for (byte[] row : rowsToDelete) {
+      // We set timestamp explicitly to avoid spending time/resources on figuring out it on server-side
+      // which can hurt performance
+      Delete d = new Delete(row, now, null);
+      d.setWriteToWAL(false);
+      deletes.add(d);
+    }
+
+    hTable.delete(deletes);
   }
 
 }

@@ -37,8 +37,22 @@ public final class UpdatesProcessingUtil {
    * @throws IOException when processing fails
    */
   public static void processUpdates(HTable hTable, UpdateProcessor updateProcessor) throws IOException {
+    // processes the whole table by default
+    processUpdates(hTable, new Scan(), updateProcessor);
+  }
+
+  /**
+   * Processes updates in HBase's table.
+   * Changes records in HTable by storing update processing results.
+   *
+   * @param hTable table to process
+   * @param scan scan that defines the records to be processed
+   * @param updateProcessor update processor
+   * @throws IOException when processing fails
+   */
+  public static void processUpdates(HTable hTable, Scan scan, UpdateProcessor updateProcessor) throws IOException {
     ResultScanner resultScanner =
-            new HutResultScanner(hTable.getScanner(new Scan()), updateProcessor, hTable, true);
+            new HutResultScanner(hTable.getScanner(scan), updateProcessor, hTable, true);
     while (resultScanner.next() != null) {
       // DO NOTHING
     }
@@ -78,6 +92,7 @@ public final class UpdatesProcessingUtil {
   public static void rollbackWrittenBetween(HTable hTable, final long startTsInclusive, final long stopTsInclusive)
           throws IOException {
     // todo: shouldn't we create some index to do this faster?
+    // TODO: set proper scan configs: caching, batching, etc.
     Scan scan = new Scan(); // all-data scan
     // todo: use hut-specific (fast-forwarding?) server-side filter to fetch only what needs to be deleted
     HTableUtil.ResultFilter filter = new HTableUtil.ResultFilter() {

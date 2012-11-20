@@ -22,6 +22,7 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.FirstKeyOnlyFilter;
 import org.apache.hadoop.hbase.util.Bytes;
 
 import java.io.IOException;
@@ -36,32 +37,13 @@ final class HTableUtil {
 
   private HTableUtil() {}
 
-  // TODO: refactor to avoid code duplication: use deleteRange method with filter
-  public static void deleteRange(HTable hTable, byte[] firstInclusive, byte[] lastInclusive, byte[] processingResultToLeave) throws IOException {
-    Scan deleteScan = getDeleteScan(firstInclusive, lastInclusive);
-    ResultScanner toDeleteScanner = hTable.getScanner(deleteScan);
-    Result toDelete = toDeleteScanner.next();
-    // Huge number of deletes can eat up all memory, hence keeping buffer
-    // TODO: implement patch for HTable to support buffering deletes instead
-    ArrayList<Delete> listToDelete = new ArrayList<Delete>(DELETES_BUFFER_MAX_SIZE);
-    while (toDelete != null) {
-      if (!Bytes.equals(processingResultToLeave, toDelete.getRow())) {
-        listToDelete.add(new Delete(toDelete.getRow()));
-        if (listToDelete.size() >= DELETES_BUFFER_MAX_SIZE) {
-          hTable.delete(listToDelete);
-          listToDelete.clear();
-        }
-      }
-      toDelete = toDeleteScanner.next();
-    }
-    // it is omitted during scan, since stopRow specified for scan means "non-inclusive", so adding here
-    if (!Bytes.equals(processingResultToLeave, lastInclusive)) {
-      listToDelete.add(new Delete(lastInclusive));
-    }
-
-    if (listToDelete.size() > 0) {
-      hTable.delete(listToDelete);
-    }
+  private static Delete createHutDelete(byte[] rowKey) {
+    Delete delete = new Delete(rowKey);
+    // Increases performance a lot. In case of failure this may cause junk records to remain, but
+    // will not corrupt the data: these records will be skipped while reading
+    // TODO: implement sanitary "junk cleaner" (MR?) job to fight with consequences.
+    delete.setWriteToWAL(false);
+    return delete;
   }
 
   public static void deleteRange(HTable hTable, byte[] firstInclusive, byte[] lastNonInclusive) throws IOException {
@@ -85,7 +67,7 @@ final class HTableUtil {
     ArrayList<Delete> listToDelete = new ArrayList<Delete>(DELETES_BUFFER_MAX_SIZE);
     while (toDelete != null) {
       if (resultFilter == null || resultFilter.accept(toDelete)) {
-        listToDelete.add(new Delete(toDelete.getRow()));
+        listToDelete.add(createHutDelete(toDelete.getRow()));
         if (listToDelete.size() >= DELETES_BUFFER_MAX_SIZE) {
           hTable.delete(listToDelete);
           listToDelete.clear();
@@ -111,6 +93,12 @@ final class HTableUtil {
 
   private static Scan getDeleteScan(byte[] firstInclusive, byte[] lastNonInclusive) {
     // TODO: think over limiting of fetched data: set single columnFam:qual with small value to fetch
-    return new Scan(firstInclusive, lastNonInclusive);
+    Scan scan = new Scan(firstInclusive, lastNonInclusive);
+    // TODO: make configurable?
+    scan.setCaching(1024);
+
+    scan.setFilter(new FirstKeyOnlyFilter());
+
+    return scan;
   }
 }
