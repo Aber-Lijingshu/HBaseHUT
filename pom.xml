@@ -4,17 +4,30 @@
 
   <groupId>com.sematext.hbasehut</groupId>
   <artifactId>hbasehut</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.0-hadoop-2.0</version>
 
   <packaging>jar</packaging>
   <name>HBaseHUT</name>
   <description>TODO</description>
+  <url>https://github.com/sematext/HBaseHUT</url>
+
+  <licenses>
+    <license>
+      <name>The Apache Software License, Version 2.0</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <scm>
+    <url>git@github.com:sematext/HBaseHUT.git</url>
+    <connection>scm:git:git@github.com/sematext/HBaseHUT.git</connection>
+  </scm>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compile.source>1.6</maven.compile.source>
     <maven.compile.target>1.6</maven.compile.target>
-    <hadoop.version>1.0.0</hadoop.version>
+    <hadoop.version>2.0.2-alpha</hadoop.version>
     <hbase.version>0.92.1</hbase.version>
     <log4j.version>1.2.16</log4j.version>
     <junit.version>[4.8.2,5.0.0)</junit.version>
@@ -75,20 +88,23 @@
   <dependencies>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-core</artifactId>
+      <artifactId>hadoop-common</artifactId>
       <version>${hadoop.version}</version>
       <scope>provided</scope>
-      <!-- This is needed to eliminate some weird -->
-      <exclusions>
-        <exclusion>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>jackson-mapper-asl</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>jackson-core-asl</artifactId>
-        </exclusion>
-      </exclusions>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-hdfs</artifactId>
+      <version>${hadoop.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-mapreduce-client-core</artifactId>
+      <version>${hadoop.version}</version>
+      <scope>provided</scope>
     </dependency>
 
     <dependency>
@@ -108,8 +124,16 @@
     <!-- Tests dependencies -->
     <dependency>
       <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-test</artifactId>
+      <artifactId>hadoop-hdfs</artifactId>
       <version>${hadoop.version}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-mapreduce-client-jobclient</artifactId>
+      <version>${hadoop.version}</version>
+      <type>test-jar</type>
       <scope>test</scope>
     </dependency>
     <dependency>
