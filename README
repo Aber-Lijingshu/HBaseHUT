@@ -69,6 +69,14 @@ The latest stable version can be linked from you maven project with:
     <version>0.1.0</version>
   </dependency>
 
+For running (MR jobs) on hadoop-2.0+ (which is a part of CDH4.1+) use:
+
+  <dependency>
+    <groupId>com.sematext.hbasehut</groupId>
+    <artifactId>hbasehut</artifactId>
+    <version>0.1.0-hadoop-2.0</version>
+  </dependency>
+
 Author:
 -------
 Alex Baranau
