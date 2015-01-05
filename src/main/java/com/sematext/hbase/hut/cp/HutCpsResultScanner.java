@@ -156,11 +156,11 @@ public class HutCpsResultScanner implements ResultScanner {
   }
 
   private Map<byte[], List<Result>> get(HTable hTable, final Scan scan, final UpdateProcessor processor) throws Throwable {
-    return hTable.coprocessorExec(HutReadProtocol.class, scan.getStartRow(), scan.getStopRow(),
-                    new Batch.Call<HutReadProtocol, List<Result>>() {
-                      public List<Result> call(HutReadProtocol instance)throws IOException {
-                        return instance.get(scan, processor);
-                      }
-                    });
+    return hTable.coprocessorService(HutReadProtocol.class, scan.getStartRow(), scan.getStopRow(),
+        new Batch.Call<HutReadProtocol, List<Result>>() {
+          public List<Result> call(HutReadProtocol instance) throws IOException {
+            return instance.get(scan, processor);
+          }
+        });
   }
 }

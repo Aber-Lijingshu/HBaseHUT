@@ -15,12 +15,19 @@
  */
 package com.sematext.hbase.hut;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInput;
+import java.io.DataInputStream;
 import java.io.DataOutput;
+import java.io.DataOutputStream;
 import java.io.IOException;
 
+import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.filter.FilterBase;
+import org.apache.hadoop.io.Writable;
 
 /**
  * Filters data based on the HBaseHUT record write time.
@@ -44,8 +51,8 @@ public class HutWriteTimeRowsFilter extends FilterBase {
   }
 
   @Override
-  public ReturnCode filterKeyValue(KeyValue kv) {
-    byte[] rowKey = kv.getRow();
+  public ReturnCode filterKeyValue(Cell kv) {
+    byte[] rowKey = kv.getRowArray();
 
     if (!HutRowKeyUtil.writtenAfter(rowKey, minTs)) {
       // omits hut data at the end of key and makes copy of the array
@@ -71,22 +78,43 @@ public class HutWriteTimeRowsFilter extends FilterBase {
 
   @Override
   public KeyValue getNextKeyHint(KeyValue currentKV) {
-    KeyValue hint =  KeyValue.createFirstOnRow(nextRowKeyHint);
+    KeyValue hint = KeyValue.createFirstOnRow(nextRowKeyHint);
     nextRowKeyHint = null;
 
     return hint;
   }
 
+  /**
+   * @return The filter serialized using pb
+   */
   @Override
-  public void write(DataOutput dataOutput) throws IOException {
-    dataOutput.writeLong(this.minTs);
-    dataOutput.writeLong(this.maxTs);
+  public byte[] toByteArray() {
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    DataOutputStream s = new DataOutputStream(bos);
+    try {
+      s.writeLong(this.minTs);
+      s.writeLong(this.maxTs);
+      return bos.toByteArray();
+    } catch (IOException e) {
+      // Shouldn't happen
+      throw new RuntimeException(e);
+    }
   }
 
-  @Override
-  public void readFields(DataInput dataInput) throws IOException {
-    this.minTs = dataInput.readLong();
-    this.maxTs = dataInput.readLong();
+  public static HutWriteTimeRowsFilter parseFrom(final byte[] pbBytes)
+      throws DeserializationException {
+
+    ByteArrayInputStream bis = new ByteArrayInputStream(pbBytes);
+    DataInputStream s = new DataInputStream(bis);
+    try {
+      HutWriteTimeRowsFilter filter = new HutWriteTimeRowsFilter();
+      filter.minTs = s.readLong();
+      filter.maxTs = s.readLong();
+      return filter;
+    } catch (IOException e) {
+      // Shouldn't happen
+      throw new RuntimeException(e);
+    }
   }
 
   @Override

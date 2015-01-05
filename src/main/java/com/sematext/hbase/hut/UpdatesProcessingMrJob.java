@@ -361,7 +361,7 @@ public final class UpdatesProcessingMrJob {
       if (tableName == null) {
         throw new IllegalStateException(HTABLE_NAME_ATTR + " missed in the configuration");
       }
-      hTable = new HTable(tableName);
+      hTable = new HTable(context.getConfiguration(), tableName);
       // NOTE: we are OK with using client-side buffer as losing deletes will not corrupt the data
       // TODO: make these settings configurable
       hTable.setAutoFlush(false);

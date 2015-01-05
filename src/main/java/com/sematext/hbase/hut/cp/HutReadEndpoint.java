@@ -17,13 +17,15 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CoprocessorEnvironment;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Result;
 
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.coprocessor.BaseEndpointCoprocessor;
+import org.apache.hadoop.hbase.coprocessor.BaseRowProcessorEndpoint;
+import org.apache.hadoop.hbase.coprocessor.CoprocessorException;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
 
@@ -33,56 +35,72 @@ import com.sematext.hbase.hut.UpdateProcessor;
 /**
  * Implements {@link HutReadProtocol}
  */
-public class HutReadEndpoint extends BaseEndpointCoprocessor implements HutReadProtocol {
+public class HutReadEndpoint extends BaseRowProcessorEndpoint implements HutReadProtocol {
+  private RegionCoprocessorEnvironment env;
 
-    public static class HutResultInternalScanner extends HutResultScanner {
-      private InternalScanner internalScanner;
-      // NOTE: this can be converted in local variable, but we keep single object instance
-      // to avoid creating redundant objects in freq invoked method
-      private List<KeyValue> curVals = new ArrayList<KeyValue>();
-      private boolean exhausted;
+  public static class HutResultInternalScanner extends HutResultScanner {
+    private InternalScanner internalScanner;
+    // NOTE: this can be converted in local variable, but we keep single object instance
+    // to avoid creating redundant objects in freq invoked method
+    private List<Cell> curVals = new ArrayList<Cell>();
+    private boolean exhausted;
 
-      public HutResultInternalScanner(InternalScanner internalScanner, UpdateProcessor updateProcessor) {
-        super(null, updateProcessor);
-        this.internalScanner = internalScanner;
-        this.exhausted = false;
-      }
-
-      @Override
-      protected void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
-        if (updateProcessor == null) {
-          throw new IllegalArgumentException("UpdateProcessor should NOT be null.");
-        }
-        // since this is "detached" scanner, ResultScanner and/or HTable can be null
-      }
-
-      @Override
-      protected Result fetchNext() throws IOException {
-        if (exhausted) {
-          return null;
-        }
-
-        curVals.clear();
-        exhausted = !internalScanner.next(curVals);
-        // TODO: place for potential improvement: may be redundant object instance creation
-        return new Result(curVals);
-      }
+    public HutResultInternalScanner(InternalScanner internalScanner, UpdateProcessor updateProcessor) {
+      super(null, updateProcessor);
+      this.internalScanner = internalScanner;
+      this.exhausted = false;
     }
 
     @Override
-    public List<Result> get(Scan scan, UpdateProcessor up) throws IOException {
-      // aggregate at each region
-      List<Result> list = new ArrayList<Result>();
-      InternalScanner scanner = ((RegionCoprocessorEnvironment) getEnvironment()).getRegion().getScanner(scan);
-      HutResultInternalScanner hutScanner = new HutResultInternalScanner(scanner, up);
-      try {
-        for (Result res : hutScanner) {
-          list.add(res);
-        }
-
-      } finally {
-        scanner.close();
+    protected void verifyInitParams(ResultScanner resultScanner, UpdateProcessor updateProcessor, HTable hTable, boolean storeProcessedUpdates) {
+      if (updateProcessor == null) {
+        throw new IllegalArgumentException("UpdateProcessor should NOT be null.");
       }
-      return list;
+      // since this is "detached" scanner, ResultScanner and/or HTable can be null
     }
+
+    @Override
+    protected Result fetchNext() throws IOException {
+      if (exhausted) {
+        return null;
+      }
+
+      curVals.clear();
+      exhausted = !internalScanner.next(curVals);
+      // TODO: place for potential improvement: may be redundant object instance creation
+      return Result.create(curVals);
+    }
+  }
+
+  @Override
+  public List<Result> get(Scan scan, UpdateProcessor up) throws IOException {
+    // aggregate at each region
+    List<Result> list = new ArrayList<Result>();
+    InternalScanner scanner = env.getRegion().getScanner(scan);
+
+    HutResultInternalScanner hutScanner = new HutResultInternalScanner(scanner, up);
+    try {
+      for (Result res : hutScanner) {
+        list.add(res);
+      }
+
+    } finally {
+      scanner.close();
+    }
+    return list;
+  }
+
+  @Override
+  public void start(CoprocessorEnvironment env) throws IOException {
+    if (env instanceof RegionCoprocessorEnvironment) {
+      this.env = (RegionCoprocessorEnvironment) env;
+    } else {
+      throw new CoprocessorException("Must be loaded on a table region!");
+    }
+  }
+
+  @Override
+  public void stop(CoprocessorEnvironment env) throws IOException {
+    // nothing to do
+  }
 }

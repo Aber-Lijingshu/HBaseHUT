@@ -16,22 +16,15 @@
 package com.sematext.hbase.hut;
 
 import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.RowLock;
+import org.apache.hadoop.hbase.regionserver.HRegion;
 
 /**
  * HBaseHUT {@link org.apache.hadoop.hbase.client.Put} implementation.
  * Use it when you want to use advantage of HBaseHUT updates processing logic.
  */
 public class HutPut extends Put {
-  /** Constructor for Writable. DO NOT USE */
-  public HutPut() {}
-
   public HutPut(byte[] row) {
     super(adjustRow(row));
-  }
-
-  public HutPut(byte[] row, RowLock rowLock) {
-    super(adjustRow(row), rowLock);
   }
 
   public HutPut(Put putToCopy) {

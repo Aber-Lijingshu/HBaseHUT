@@ -169,7 +169,7 @@ public class HutResultScanner implements ResultScanner {
     return resultSets.toArray(new Result[resultSets.size()]);
 
   }
-  
+
   @Override
   public Iterator<Result> iterator() {
     // Identical to HTable.ClientScanner implementation
@@ -571,7 +571,7 @@ public class HutResultScanner implements ResultScanner {
     for (byte[] row : rowsToDelete) {
       // We set timestamp explicitly to avoid spending time/resources on figuring out it on server-side
       // which can hurt performance
-      Delete d = new Delete(row, now, null);
+      Delete d = new Delete(row, now);
       d.setWriteToWAL(false);
       deletes.add(d);
     }
