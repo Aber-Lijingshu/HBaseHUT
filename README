@@ -77,6 +77,14 @@ For running (MR jobs) on hadoop-2.0+ (which is a part of CDH4.1+) use:
     <version>0.1.0-hadoop-2.0</version>
   </dependency>
 
+For running (MR jobs) on CDH5.3+) use:
+
+  <dependency>
+    <groupId>com.sematext.hbasehut</groupId>
+    <artifactId>hbasehut</artifactId>
+    <version>0.1.0-cdh5.3.0</version>
+  </dependency>
+
 Author:
 -------
 Alex Baranau
